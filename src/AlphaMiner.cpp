@@ -1195,163 +1195,208 @@ void handleQatumData(std::string data)
     }
 }
 
+static const char *DEFAULT_POOL_IP = "131.106.76.202";
+static const int DEFAULT_POOL_PORT = 7777;
+static const char *ALPHAMINER_VERSION = "0.1.0";
+
 int main(int argc, char *argv[])
 {
     char miningID[61];
     miningID[60] = 0;
     string qatumBuffer = "";
     std::vector<std::thread> miningThreads;
-    if (argc != 6)
+
+    printf("\n");
+    printf("  ╔═══════════════════════════════════════════════════╗\n");
+    printf("  ║        AlphaMiner v%s — Qubic (UPoW)           ║\n", ALPHAMINER_VERSION);
+    printf("  ║        AlphaPool — qubic.alphapool.tech           ║\n");
+    printf("  ╚═══════════════════════════════════════════════════╝\n\n");
+
+    if (argc < 3)
     {
-        printf("Usage:   Qiner [Qatum IP] [Qatum Port] [Wallet] [Worker] [Threads]\n");
+        printf("Usage:   AlphaMiner <Wallet> <Worker> [Threads] [Pool IP] [Pool Port]\n\n");
+        printf("  Wallet    Your 60-character Qubic address\n");
+        printf("  Worker    Worker name (e.g. rig01)\n");
+        printf("  Threads   CPU threads (default: all cores)\n");
+        printf("  Pool IP   Qatum pool IP (default: %s)\n", DEFAULT_POOL_IP);
+        printf("  Pool Port Qatum pool port (default: %d)\n\n", DEFAULT_POOL_PORT);
+        printf("Example:\n");
+        printf("  AlphaMiner EQVUBBETJJUY...MAGTFPF rig01 32\n\n");
+        return 1;
+    }
+
+    char *wallet = argv[1];
+    char *worker = argv[2];
+
+    unsigned int numberOfThreads = 0;
+    if (argc >= 4)
+    {
+        numberOfThreads = atoi(argv[3]);
+    }
+    if (numberOfThreads == 0)
+    {
+        numberOfThreads = std::thread::hardware_concurrency();
+        if (numberOfThreads == 0) numberOfThreads = 4;
+    }
+
+    if (argc >= 5)
+    {
+        nodeIp = argv[4];
     }
     else
     {
-        nodeIp = argv[1];
-        nodePort = std::atoi(argv[2]);
-        char *wallet = argv[3];
-        char *worker = argv[4];
-        printf("Qiner is launched. Connecting to %s:%d\n", nodeIp, nodePort);
+        nodeIp = (char *)DEFAULT_POOL_IP;
+    }
 
-        json j;
-        j["id"] = 1;
-        j["wallet"] = wallet;
-        j["worker"] = worker;
-        std::string s = j.dump() + "\n";
-        char *buffer = new char[s.size()];
-        strcpy(buffer, s.c_str());
-        ServerSocket serverSocket;
-        bool ok = serverSocket.establishConnection(nodeIp);
-        if (!ok)
+    if (argc >= 6)
+    {
+        nodePort = std::atoi(argv[5]);
+    }
+    else
+    {
+        nodePort = DEFAULT_POOL_PORT;
+    }
+
+    printf("  Pool:    %s:%d\n", nodeIp, nodePort);
+    printf("  Wallet:  %.15s...%.7s\n", wallet, wallet + strlen(wallet) - 7);
+    printf("  Worker:  %s\n", worker);
+    printf("  Threads: %u\n\n", numberOfThreads);
+
+    json j;
+    j["id"] = 1;
+    j["wallet"] = wallet;
+    j["worker"] = worker;
+    std::string s = j.dump() + "\n";
+    char *buffer = new char[s.size() + 1];
+    memcpy(buffer, s.c_str(), s.size());
+    ServerSocket serverSocket;
+    bool ok = serverSocket.establishConnection(nodeIp);
+    if (!ok)
+    {
+        printf("[!] Failed to connect to pool at %s:%d\n", nodeIp, nodePort);
+        return 1;
+    }
+    printf("[+] Connected to pool\n");
+    serverSocket.sendData(buffer, s.size());
+    delete[] buffer;
+
+    consoleCtrlHandler();
+
+    {
+        miningThreads.resize(numberOfThreads);
+        for (unsigned int i = numberOfThreads; i-- > 0;)
         {
-            printf("Failed to connect to Qatum server\n");
-            return 1;
+            miningThreads.emplace_back(miningThreadProc);
         }
-        serverSocket.sendData(buffer, s.size());
-        delete[] buffer;
 
-        //  consoleCtrlHandler();
-
+        auto timestamp = std::chrono::steady_clock::now();
+        long long prevNumberOfMiningIterations = 0;
+        long long lastIts = 0;
+        unsigned long long loopCount = 0;
+        while (!state)
         {
-            unsigned int numberOfThreads = atoi(argv[5]);
-            miningThreads.resize(numberOfThreads);
-            for (unsigned int i = numberOfThreads; i-- > 0;)
+            if (loopCount % 30 == 0 && loopCount > 0)
             {
-                miningThreads.emplace_back(miningThreadProc);
+                json j;
+                j["id"] = REPORT_HASHRATE;
+                j["computorId"] = miningID;
+                j["hashrate"] = lastIts;
+                string buffer = j.dump() + "\n";
+                serverSocket.sendData((char *)buffer.c_str(), buffer.size());
             }
 
-            auto timestamp = std::chrono::steady_clock::now();
-            long long prevNumberOfMiningIterations = 0;
-            long long lastIts = 0;
-            unsigned long long loopCount = 0;
-            while (!state)
+            std::vector<uint8_t> receivedData;
+            serverSocket.receiveDataAll(receivedData);
+            std::string str(receivedData.begin(), receivedData.end());
+            qatumBuffer += str;
+
+            while (qatumBuffer.find("\n") != std::string::npos)
             {
-                if (loopCount % 30 == 0 && loopCount > 0)
-                {
-                    json j;
-                    j["id"] = REPORT_HASHRATE;
-                    j["computorId"] = miningID;
-                    j["hashrate"] = lastIts;
-                    string buffer = j.dump() + "\n";
-                    serverSocket.sendData((char *)buffer.c_str(), buffer.size());
-                }
+                std::string data = qatumBuffer.substr(0, qatumBuffer.find("\n"));
+                handleQatumData(data);
+                qatumBuffer = qatumBuffer.substr(qatumBuffer.find("\n") + 1);
+            }
 
-                // receive data
-                std::vector<uint8_t> receivedData;
-                serverSocket.receiveDataAll(receivedData);
-                std::string str(receivedData.begin(), receivedData.end());
-                qatumBuffer += str;
+            getIdentityFromPublicKey(computorPublicKey, miningID, false);
 
-                while (qatumBuffer.find("\n") != std::string::npos)
-                {
-                    std::string data = qatumBuffer.substr(0, qatumBuffer.find("\n"));
-                    handleQatumData(data);
-                    qatumBuffer = qatumBuffer.substr(qatumBuffer.find("\n") + 1);
-                }
-
-                getIdentityFromPublicKey(computorPublicKey, miningID, false);
-
-                bool haveNonceToSend = false;
-                size_t itemToSend = 0;
-                std::array<unsigned char, 32> sendNonce;
-                {
-                    std::lock_guard<std::mutex> guard(foundNonceLock);
-                    haveNonceToSend = foundNonce.size() > 0;
-                    if (haveNonceToSend)
-                    {
-                        sendNonce = foundNonce.front();
-                    }
-                    itemToSend = foundNonce.size();
-                }
-
+            bool haveNonceToSend = false;
+            size_t itemToSend = 0;
+            std::array<unsigned char, 32> sendNonce;
+            {
+                std::lock_guard<std::mutex> guard(foundNonceLock);
+                haveNonceToSend = foundNonce.size() > 0;
                 if (haveNonceToSend)
                 {
-                    char nonceHex[65];
-                    char seedHex[65];
-                    char id[61];
-                    id[60] = 0;
-                    nonceHex[64] = 0;
-                    seedHex[64] = 0;
-                    getIdentityFromPublicKey(computorPublicKey, id, false);
-                    byteToHex(sendNonce.data(), nonceHex, 32);
-                    byteToHex(randomSeed, seedHex, 32);
-                    json j;
-                    j["id"] = SUBMIT;
-                    j["nonce"] = nonceHex;
-                    j["seed"] = seedHex;
-                    j["computorId"] = id;
-                    string buffer = j.dump() + "\n";
-                    serverSocket.sendData((char *)buffer.c_str(), buffer.size());
-                    foundNonce.pop();
+                    sendNonce = foundNonce.front();
                 }
-
-                unsigned long long delta = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timestamp).count();
-                if (delta >= 1000)
-                {
-                    if (ActiveMiner::checkGlobalQatumDataAvailability())
-                    {
-                        lastIts = (numberOfMiningIterations - prevNumberOfMiningIterations) * 1000 / delta;
-                        // Get current time in UTC
-                        std::time_t now_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-                        std::tm *utc_time = std::gmtime(&now_time);
-                        printf("|   %04d-%02d-%02d %02d:%02d:%02d   |   %llu it/s   |   %d solutions   |   %.7s...%.7s   |   Difficulty %d   |\n",
-                               utc_time->tm_year + 1900, utc_time->tm_mon, utc_time->tm_mday, utc_time->tm_hour, utc_time->tm_min, utc_time->tm_sec,
-                               lastIts, numberOfFoundSolutions.load(), miningID, &miningID[53], difficulty.load());
-                        prevNumberOfMiningIterations = numberOfMiningIterations;
-                        timestamp = std::chrono::steady_clock::now();
-                    }
-                    else
-                    {
-                        if (isZeros<32>(computorPublicKey))
-                        {
-                            printf("Waiting for computor public key...\n");
-                        }
-                        else if (isZeros<32>(randomSeed))
-                        {
-                            printf("Waiting for random seed, we are idle now...\n");
-                        }
-                        else if (difficulty == 0)
-                        {
-                            printf("Waiting for difficulty...\n");
-                        }
-                    }
-                }
-                std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
-                loopCount++;
+                itemToSend = foundNonce.size();
             }
-        }
-        printf("Shutting down...Press Ctrl+C again to force stop.\n");
 
-        // Wait for all threads to join
-        for (auto &miningTh : miningThreads)
-        {
-            if (miningTh.joinable())
+            if (haveNonceToSend)
             {
-                miningTh.join();
+                char nonceHex[65];
+                char seedHex[65];
+                char id[61];
+                id[60] = 0;
+                nonceHex[64] = 0;
+                seedHex[64] = 0;
+                getIdentityFromPublicKey(computorPublicKey, id, false);
+                byteToHex(sendNonce.data(), nonceHex, 32);
+                byteToHex(randomSeed, seedHex, 32);
+                json j;
+                j["id"] = SUBMIT;
+                j["nonce"] = nonceHex;
+                j["seed"] = seedHex;
+                j["computorId"] = id;
+                string buffer = j.dump() + "\n";
+                serverSocket.sendData((char *)buffer.c_str(), buffer.size());
+                foundNonce.pop();
             }
+
+            unsigned long long delta = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timestamp).count();
+            if (delta >= 1000)
+            {
+                if (ActiveMiner::checkGlobalQatumDataAvailability())
+                {
+                    lastIts = (numberOfMiningIterations - prevNumberOfMiningIterations) * 1000 / delta;
+                    std::time_t now_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+                    std::tm *utc_time = std::gmtime(&now_time);
+                    printf("[AlphaMiner]  %04d-%02d-%02d %02d:%02d:%02d UTC  |  %llu it/s  |  %d solutions  |  %.7s...%.7s  |  diff %d\n",
+                           utc_time->tm_year + 1900, utc_time->tm_mon + 1, utc_time->tm_mday, utc_time->tm_hour, utc_time->tm_min, utc_time->tm_sec,
+                           lastIts, numberOfFoundSolutions.load(), miningID, &miningID[53], difficulty.load());
+                    prevNumberOfMiningIterations = numberOfMiningIterations;
+                    timestamp = std::chrono::steady_clock::now();
+                }
+                else
+                {
+                    if (isZeros<32>(computorPublicKey))
+                    {
+                        printf("[~] Waiting for computor public key...\n");
+                    }
+                    else if (isZeros<32>(randomSeed))
+                    {
+                        printf("[~] Waiting for mining seed (idle phase)...\n");
+                    }
+                    else if (difficulty == 0)
+                    {
+                        printf("[~] Waiting for difficulty...\n");
+                    }
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
+            loopCount++;
         }
-        printf("Qiner is shut down.\n");
     }
+    printf("\n[*] Shutting down... Press Ctrl+C again to force stop.\n");
+
+    for (auto &miningTh : miningThreads)
+    {
+        if (miningTh.joinable())
+        {
+            miningTh.join();
+        }
+    }
+    printf("[*] AlphaMiner stopped.\n");
 
     return 0;
 }

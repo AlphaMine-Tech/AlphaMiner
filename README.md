@@ -1,80 +1,49 @@
-# Qubic Reference Miner
-This Repo contains the reference implementation of the algoritm used in Qubic and Qatum mining protocol.
+# AlphaMiner — Qubic CPU Miner
 
-# Requirement
-- CPU: support at least AVX2 instruction set
-- OS: Windows, Linux
+Private mining software for [AlphaPool](https://qubic.alphapool.tech). Mines Qubic UPoW (Useful Proof of Work) via the Qatum protocol.
 
-# Build
-## Windows
-### Visual Studio 2022
-- Open Qiner.sln
-- Build
-### Other Visual Studio versions
+## Requirements
+- **CPU:** AVX2 minimum, AVX512 recommended
+- **OS:** Linux, Windows
 
-- Support generation using CMake with below command
-```
-# Assume in Qiner folder
-mkdir build
-cd build
-"C:\Program Files\CMake\bin\cmake.exe" -G <Visual Studio Generator>
-# Example: C:\Program Files\CMake\bin\cmake.exe" -G "Visual Studio 17 2022"
-```
-- Open Qiner.sln in build folder and build
+## Build (Linux)
 
-### Enable AVX512
-- Open Qiner.sln
-- Right click Qiner->[C/C++]->[Code Generation]->[Enable Enhanced Instruction Set] -> [...AVX512] -> OK
-
-## Linux
-Currently support GCC and Clang
-- Installed required libraries
-
-For example,
-- Ubuntu with GCC
-```
-sudo apt install build-essential
-```
-- Ubuntu with Clang
-```
-sudo apt install build-essential
-sudo apt install clang
-```
-
-
-### GCC
-Run below command
-```
-mkdir build
-cd build
+```bash
+mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j8
+make -j$(nproc)
 ```
 
-### Clang
-Run below command
-```
-mkdir build
-cd build
-CC=clang CXX=clang++ cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j8
-```
-
-### Enable AVX512
-To enable AVX512, -DENABLE_AVX512=1 need to be parse in the cmake command.
-
-Example,
-```
-# GCC
+With AVX512 (recommended for EPYC/Xeon):
+```bash
 cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX512=1
-
-# Clang
-CC=clang CXX=clang++ cmake .. -DCMAKE_BUILD_TYPE=Release -DENABLE_AVX512=1
+make -j$(nproc)
 ```
 
-# Run
-```
-Qiner [Qatum IP] [Qatum Port] [Wallet] [Worker] [Threads]
-```
-- number of threads:  Optional, if not parse default number of cores will be used
+## Usage
 
+```
+AlphaMiner <Wallet> <Worker> [Threads] [Pool IP] [Pool Port]
+```
+
+- **Wallet** — Your 60-character Qubic address
+- **Worker** — Worker name (e.g. `rig01`)
+- **Threads** — CPU threads (default: all cores)
+- **Pool IP** — Defaults to AlphaPool (`131.106.76.202`)
+- **Pool Port** — Defaults to `7777`
+
+### Examples
+
+Mine with all cores (auto-detect):
+```bash
+./AlphaMiner EQVUBBETJJUYCHNWEPZJMHUATJZAIVQHSYGLQFTEJFPOYAIXDDVKBMAGTFPF rig01
+```
+
+Mine with 32 threads:
+```bash
+./AlphaMiner EQVUBBETJJUYCHNWEPZJMHUATJZAIVQHSYGLQFTEJFPOYAIXDDVKBMAGTFPF rig01 32
+```
+
+## Based on
+
+Forked from [hackerby888/Qiner](https://github.com/hackerby888/Qiner) (Qubic reference miner).

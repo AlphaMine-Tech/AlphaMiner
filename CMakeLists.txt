@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Qiner LANGUAGES CXX)
+project(AlphaMiner LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
@@ -9,17 +9,22 @@ if(CMAKE_CMAKE_BUILD_TYPE MATCHES DEBUG)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g")
 endif()
 
+option(ENABLE_AVX512 "Enable AVX512 instruction set" OFF)
+
 # Additional cmake flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mrdrnd -mbmi")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mrdrnd -mbmi")
+    if(ENABLE_AVX512)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f")
+    endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 else()
     message(FATAL "Unsupported compiler.")
 endif()
 
 # Main executable
-add_executable(${PROJECT_NAME} src/Qiner.cpp src/keyUtils.cpp)
+add_executable(${PROJECT_NAME} src/AlphaMiner.cpp src/keyUtils.cpp)
 
 include_directories(${PROJECT_NAME} ./src)
 
