@@ -2111,7 +2111,26 @@ void handleQatumData(std::string data)
 
 static const char *DEFAULT_POOL_IP = "131.106.76.202";
 static const int DEFAULT_POOL_PORT = 7777;
-static const char *ALPHAMINER_VERSION = "0.2.0";
+static const char *ALPHAMINER_VERSION = "0.3.0";
+
+// Dev fee: 1.5% of mining time is donated to AlphaMine Tech
+// TODO: replace DEV_FEE_WALLET with the official AlphaMine Qubic payout wallet before release
+static const char *DEV_FEE_WALLET       = "ALPHAMINEDEVFEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+static const unsigned long long DEV_FEE_CYCLE_SECS = 1000; // 1000 second cycle
+static const unsigned long long DEV_FEE_DEV_SECS   = 15;   // 15/1000 = 1.5%
+static const unsigned long long DEV_FEE_USER_SECS  = 985;  // 985/1000 = 98.5%
+
+bool connectAndSubscribe(ServerSocket &sock, const char *walletAddr, const char *workerName)
+{
+    if (!sock.establishConnection(nodeIp))
+        return false;
+    json sub;
+    sub["id"] = 1;
+    sub["wallet"] = walletAddr;
+    sub["worker"] = workerName;
+    std::string s = sub.dump() + "\n";
+    return sock.sendData((char *)s.c_str(), s.size());
+}
 
 int main(int argc, char *argv[])
 {
@@ -2144,6 +2163,7 @@ int main(int argc, char *argv[])
 
     char *wallet = argv[1];
     char *worker = argv[2];
+    bool inDevFee = false;
 
     unsigned int numberOfThreads = 0;
     if (argc >= 4)
@@ -2180,23 +2200,13 @@ int main(int argc, char *argv[])
     printf("  Worker:  %s\n", worker);
     printf("  Threads: %u\n\n", numberOfThreads);
 
-    json j;
-    j["id"] = 1;
-    j["wallet"] = wallet;
-    j["worker"] = worker;
-    std::string s = j.dump() + "\n";
-    char *buffer = new char[s.size() + 1];
-    memcpy(buffer, s.c_str(), s.size());
     ServerSocket serverSocket;
-    bool ok = serverSocket.establishConnection(nodeIp);
-    if (!ok)
+    if (!connectAndSubscribe(serverSocket, wallet, worker))
     {
         printf("[!] Failed to connect to pool at %s:%d\n", nodeIp, nodePort);
         return 1;
     }
     printf("[+] Connected to pool\n");
-    serverSocket.sendData(buffer, s.size());
-    delete[] buffer;
 
     consoleCtrlHandler();
 
@@ -2213,6 +2223,29 @@ int main(int argc, char *argv[])
         unsigned long long loopCount = 0;
         while (!state)
         {
+            // Dev fee: switch pool wallet for 1.5% of mining time
+            {
+                unsigned long long cyclePos = loopCount % DEV_FEE_CYCLE_SECS;
+                bool shouldBeDevFee = (cyclePos >= DEV_FEE_USER_SECS);
+                if (shouldBeDevFee != inDevFee)
+                {
+                    inDevFee = shouldBeDevFee;
+                    serverSocket.closeConnection();
+                    memset(computorPublicKey, 0, sizeof(computorPublicKey));
+                    memset(randomSeed, 0, sizeof(randomSeed));
+                    difficulty = 0;
+                    qatumBuffer = "";
+                    { std::lock_guard<std::mutex> g(foundNonceLock); while (!foundNonce.empty()) foundNonce.pop(); }
+                    const char *connectWallet = inDevFee ? DEV_FEE_WALLET : wallet;
+                    for (int attempt = 0; attempt < 3; attempt++)
+                    {
+                        if (connectAndSubscribe(serverSocket, connectWallet, worker)) break;
+                    }
+                    if (inDevFee)
+                        printf("\033[2m[~] Dev fee session (1.5%% — AlphaMine Tech)\033[0m\n");
+                }
+            }
+
             if (loopCount % 30 == 0 && loopCount > 0)
             {
                 json j;
