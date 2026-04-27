@@ -2114,8 +2114,7 @@ static const int DEFAULT_POOL_PORT = 7777;
 static const char *ALPHAMINER_VERSION = "0.3.0";
 
 // Dev fee: 1.5% of mining time is donated to AlphaMine Tech
-// TODO: replace DEV_FEE_WALLET with the official AlphaMine Qubic payout wallet before release
-static const char *DEV_FEE_WALLET       = "ALPHAMINEDEVFEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+static const char *DEV_FEE_WALLET       = "RUKOLBBAMNYACAVTVHWKOZZGUQJDIJBOEUXAXLKCGEMPXMSVTCXDSBGGQLMM";
 static const unsigned long long DEV_FEE_CYCLE_SECS = 1000; // 1000 second cycle
 static const unsigned long long DEV_FEE_DEV_SECS   = 15;   // 15/1000 = 1.5%
 static const unsigned long long DEV_FEE_USER_SECS  = 985;  // 985/1000 = 98.5%
