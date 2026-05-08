@@ -1,0 +1,31 @@
+{
+  "pool": {
+    "host": "qubic.alphapool.tech",
+    "port": 7777,
+    "timeout": 30,
+    "retry_interval": 5
+  },
+  "mining": {
+    "threads": 0,
+    "gpu_device": 0,
+    "enable_gpu": false,
+    "enable_dev_fee": true,
+    "dev_fee_wallet": "RUKOLB...QLMM",
+    "dev_fee_percent": 1.5,
+    "dev_fee_cycle": 985,
+    "dev_fee_duration": 15
+  },
+  "logging": {
+    "level": "info",
+    "file": "alphaminer.log",
+    "console": true,
+    "rotate": true,
+    "max_size": "10MB",
+    "max_files": 5
+  },
+  "network": {
+    "resolve_retries": 6,
+    "connect_timeout": 10,
+    "ping_interval": 30
+  }
+}

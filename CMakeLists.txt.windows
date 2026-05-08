@@ -1,0 +1,105 @@
+cmake_minimum_required(VERSION 3.21)
+project(AlphaMiner LANGUAGES CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+
+if(CMAKE_BUILD_TYPE MATCHES DEBUG)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g")
+endif()
+
+option(ENABLE_AVX512 "Enable AVX512 instruction set" OFF)
+option(ENABLE_CUDA "Enable CUDA GPU mining" OFF)
+option(ENABLE_WINDOWS "Build for Windows" ON)
+
+# Windows-specific configuration
+if(WIN32)
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD 17)
+    
+    # Architecture flags for Windows
+    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+        # MSVC flags for modern CPUs
+        add_compile_options(/arch:AVX2 /permissive- /bigobj)
+        if(ENABLE_AVX512)
+            add_compile_options(/arch:AVX512)
+        endif()
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # GCC/Clang flags for Windows
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mrdrnd -mbmi -march=native -mtune=native")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mrdrnd -mbmi")
+        if(ENABLE_AVX512)
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f")
+        endif()
+    endif()
+else()
+    # Linux flags
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mrdrnd -mbmi -march=native -mtune=native -funroll-loops")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mrdrnd -mbmi")
+        if(ENABLE_AVX512)
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f")
+        endif()
+    endif()
+endif()
+
+# CUDA configuration
+if(ENABLE_CUDA)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_ARCHITECTURES 86)  # Pascal and newer
+    
+    # CUDA sources
+    set(CUDA_SOURCES
+        src/cuda/gpu_miner.cu
+        src/cuda/mining_kernel.cu
+    )
+    
+    # Main executable with CUDA support
+    add_executable(${PROJECT_NAME} 
+        src/AlphaMiner.cpp 
+        src/keyUtils.cpp
+        ${CUDA_SOURCES}
+    )
+    
+    target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_CUDA)
+    target_include_directories(${PROJECT_NAME} PRIVATE src src/cuda)
+    
+    # CUDA compilation flags
+    if(WIN32)
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -Xcompiler=/arch:AVX2>
+        )
+    else()
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -Xcompiler=-mrdrnd,-mbmi>
+        )
+    endif()
+    
+    # Link CUDA runtime
+    target_link_libraries(${PROJECT_NAME} ${CUDA_CUDART_LIBRARY})
+else()
+    # CPU-only executable
+    add_executable(${PROJECT_NAME} src/AlphaMiner.cpp src/keyUtils.cpp)
+    include_directories(${PROJECT_NAME} ./src)
+endif()
+
+# Windows-specific linking
+if(WIN32)
+    target_link_libraries(${PROJECT_NAME} 
+        wsock32 
+        ws2_32 
+        bcrypt 
+        crypt32
+    )
+else()
+    target_link_libraries(${PROJECT_NAME} pthread)
+endif()
+
+# Install configuration
+install(TARGETS ${PROJECT_NAME} 
+        RUNTIME DESTINATION bin
+        BUNDLE DESTINATION bin)
+
+# Install config file
+install(FILES config.json DESTINATION bin)
