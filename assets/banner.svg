@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300" viewBox="0 0 900 300">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#080b0f;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0e1318;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00d4aa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00a884;stop-opacity:1" />
+    </linearGradient>
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <circle cx="30" cy="30" r="1" fill="#00d4aa" opacity="0.08"/>
+    </pattern>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowSoft">
+      <feGaussianBlur stdDeviation="6" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="300" fill="url(#bg)"/>
+  <rect width="900" height="300" fill="url(#grid)"/>
+
+  <!-- ═══════ Brain-shaped neural network ═══════ -->
+  <!-- Brain outline (subtle, organic shape) centered at ~750, 150 -->
+
+  <!-- Brain stem / spinal connection -->
+  <line x1="750" y1="250" x2="750" y2="275" stroke="#00d4aa" stroke-width="1.5" opacity="0.15"/>
+  <line x1="745" y1="260" x2="755" y2="275" stroke="#00d4aa" stroke-width="1" opacity="0.1"/>
+
+  <!-- ── Connections (drawn first, behind nodes) ── -->
+  <!-- Left hemisphere connections -->
+  <line x1="690" y1="70" x2="670" y2="110" stroke="#00d4aa" stroke-width="0.8" opacity="0.25"/>
+  <line x1="690" y1="70" x2="720" y2="105" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="670" y1="110" x2="660" y2="150" stroke="#00d4aa" stroke-width="0.8" opacity="0.25"/>
+  <line x1="670" y1="110" x2="720" y2="105" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+  <line x1="660" y1="150" x2="665" y2="195" stroke="#00d4aa" stroke-width="0.8" opacity="0.25"/>
+  <line x1="660" y1="150" x2="700" y2="155" stroke="#00d4aa" stroke-width="0.7" opacity="0.18"/>
+  <line x1="665" y1="195" x2="690" y2="230" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="665" y1="195" x2="710" y2="200" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+
+  <!-- Right hemisphere connections -->
+  <line x1="810" y1="70" x2="830" y2="110" stroke="#00d4aa" stroke-width="0.8" opacity="0.25"/>
+  <line x1="810" y1="70" x2="780" y2="105" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="830" y1="110" x2="840" y2="150" stroke="#00d4aa" stroke-width="0.8" opacity="0.25"/>
+  <line x1="830" y1="110" x2="780" y2="105" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+  <line x1="840" y1="150" x2="835" y2="195" stroke="#00d4aa" stroke-width="0.8" opacity="0.25"/>
+  <line x1="840" y1="150" x2="800" y2="155" stroke="#00d4aa" stroke-width="0.7" opacity="0.18"/>
+  <line x1="835" y1="195" x2="810" y2="230" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="835" y1="195" x2="790" y2="200" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+
+  <!-- Top cross connections (corpus callosum) -->
+  <line x1="720" y1="105" x2="780" y2="105" stroke="#00d4aa" stroke-width="0.9" opacity="0.2"/>
+  <line x1="690" y1="70" x2="750" y2="50" stroke="#00d4aa" stroke-width="0.7" opacity="0.18"/>
+  <line x1="810" y1="70" x2="750" y2="50" stroke="#00d4aa" stroke-width="0.7" opacity="0.18"/>
+
+  <!-- Middle cross connections -->
+  <line x1="700" y1="155" x2="750" y2="150" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="800" y1="155" x2="750" y2="150" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="710" y1="200" x2="750" y2="200" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+  <line x1="790" y1="200" x2="750" y2="200" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+
+  <!-- Bottom convergence -->
+  <line x1="690" y1="230" x2="750" y2="250" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="810" y1="230" x2="750" y2="250" stroke="#00d4aa" stroke-width="0.8" opacity="0.2"/>
+  <line x1="720" y1="240" x2="750" y2="250" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+  <line x1="780" y1="240" x2="750" y2="250" stroke="#00d4aa" stroke-width="0.7" opacity="0.15"/>
+
+  <!-- Deep internal connections -->
+  <line x1="720" y1="105" x2="700" y2="155" stroke="#00d4aa" stroke-width="0.6" opacity="0.12"/>
+  <line x1="780" y1="105" x2="800" y2="155" stroke="#00d4aa" stroke-width="0.6" opacity="0.12"/>
+  <line x1="750" y1="50" x2="750" y2="150" stroke="#00d4aa" stroke-width="0.5" opacity="0.08"/>
+  <line x1="700" y1="155" x2="720" y2="240" stroke="#00d4aa" stroke-width="0.5" opacity="0.1"/>
+  <line x1="800" y1="155" x2="780" y2="240" stroke="#00d4aa" stroke-width="0.5" opacity="0.1"/>
+  <line x1="670" y1="110" x2="700" y2="155" stroke="#00d4aa" stroke-width="0.5" opacity="0.1"/>
+  <line x1="830" y1="110" x2="800" y2="155" stroke="#00d4aa" stroke-width="0.5" opacity="0.1"/>
+  <line x1="750" y1="150" x2="750" y2="200" stroke="#00d4aa" stroke-width="0.6" opacity="0.12"/>
+  <line x1="750" y1="200" x2="750" y2="250" stroke="#00d4aa" stroke-width="0.6" opacity="0.12"/>
+
+  <!-- ── Nodes (brain-shaped arrangement) ── -->
+  <!-- Top of brain (frontal lobe) -->
+  <circle cx="750" cy="50" r="5" fill="#00d4aa" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- Left hemisphere outer edge -->
+  <circle cx="690" cy="70" r="4" fill="#00d4aa" opacity="0.4" filter="url(#glow)"/>
+  <circle cx="670" cy="110" r="3.5" fill="#00d4aa" opacity="0.35"/>
+  <circle cx="660" cy="150" r="4" fill="#00d4aa" opacity="0.45" filter="url(#glow)"/>
+  <circle cx="665" cy="195" r="3" fill="#00d4aa" opacity="0.3"/>
+  <circle cx="690" cy="230" r="3.5" fill="#00d4aa" opacity="0.35" filter="url(#glow)"/>
+
+  <!-- Left hemisphere inner -->
+  <circle cx="720" cy="105" r="3" fill="#00d4aa" opacity="0.4"/>
+  <circle cx="700" cy="155" r="3.5" fill="#00d4aa" opacity="0.35" filter="url(#glow)"/>
+  <circle cx="710" cy="200" r="2.5" fill="#00d4aa" opacity="0.3"/>
+  <circle cx="720" cy="240" r="2.5" fill="#00d4aa" opacity="0.25"/>
+
+  <!-- Right hemisphere outer edge -->
+  <circle cx="810" cy="70" r="4" fill="#00d4aa" opacity="0.4" filter="url(#glow)"/>
+  <circle cx="830" cy="110" r="3.5" fill="#00d4aa" opacity="0.35"/>
+  <circle cx="840" cy="150" r="4" fill="#00d4aa" opacity="0.45" filter="url(#glow)"/>
+  <circle cx="835" cy="195" r="3" fill="#00d4aa" opacity="0.3"/>
+  <circle cx="810" cy="230" r="3.5" fill="#00d4aa" opacity="0.35" filter="url(#glow)"/>
+
+  <!-- Right hemisphere inner -->
+  <circle cx="780" cy="105" r="3" fill="#00d4aa" opacity="0.4"/>
+  <circle cx="800" cy="155" r="3.5" fill="#00d4aa" opacity="0.35" filter="url(#glow)"/>
+  <circle cx="790" cy="200" r="2.5" fill="#00d4aa" opacity="0.3"/>
+  <circle cx="780" cy="240" r="2.5" fill="#00d4aa" opacity="0.25"/>
+
+  <!-- Center nodes (deep brain) -->
+  <circle cx="750" cy="150" r="5" fill="#00d4aa" opacity="0.5" filter="url(#glowSoft)"/>
+  <circle cx="750" cy="200" r="3" fill="#00d4aa" opacity="0.35"/>
+  <circle cx="750" cy="250" r="4" fill="#00d4aa" opacity="0.4" filter="url(#glow)"/>
+
+  <!-- Accent line top -->
+  <rect x="0" y="0" width="900" height="2" fill="url(#accent)"/>
+
+  <!-- Title -->
+  <text x="60" y="105" font-family="'Segoe UI', Arial, sans-serif" font-size="52" font-weight="700" fill="#e8edf2" letter-spacing="2">
+    ALPHA<tspan fill="#00d4aa">MINER</tspan>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="62" y="145" font-family="'Segoe UI', Arial, sans-serif" font-size="18" fill="#7a8a9a" letter-spacing="4">
+    QUBIC UPoW GPU MINER
+  </text>
+
+  <!-- Accent line under subtitle -->
+  <rect x="60" y="160" width="120" height="2" fill="url(#accent)" rx="1"/>
+
+  <!-- Stats badges -->
+  <text x="62" y="200" font-family="'Courier New', monospace" font-size="13" fill="#00d4aa" opacity="0.8">
+    CUDA + CPU  |  BLOCK-COOPERATIVE KERNEL  |  82x FASTER
+  </text>
+
+  <!-- Attribution -->
+  <g transform="translate(60, 230)" opacity="0.5">
+    <text font-size="14" fill="#7a8a9a" font-family="'Segoe UI', Arial, sans-serif">by AlphaMine  ·  alphapool.tech</text>
+  </g>
+
+  <!-- Bottom accent line -->
+  <rect x="0" y="298" width="900" height="2" fill="url(#accent)"/>
+</svg>

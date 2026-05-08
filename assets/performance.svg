@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="200" viewBox="0 0 700 200">
+  <defs>
+    <linearGradient id="pbg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#080b0f;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#0e1318;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="bar1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#00d4aa;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#00a884;stop-opacity:1"/>
+    </linearGradient>
+    <linearGradient id="bar2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#7a8a9a;stop-opacity:0.6"/>
+      <stop offset="100%" style="stop-color:#7a8a9a;stop-opacity:0.3"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="700" height="200" fill="url(#pbg)" rx="8"/>
+  <rect x="0" y="0" width="700" height="1" fill="#1e2830"/>
+
+  <!-- Title -->
+  <text x="30" y="35" font-family="'Segoe UI', Arial, sans-serif" font-size="16" font-weight="600" fill="#e8edf2">Performance Comparison</text>
+  <text x="30" y="55" font-family="'Segoe UI', Arial, sans-serif" font-size="11" fill="#7a8a9a">RTX 3070 Ti  ·  Qubic UPoW  ·  iterations per minute</text>
+
+  <!-- GPU Bar -->
+  <text x="30" y="95" font-family="'Courier New', monospace" font-size="12" fill="#00d4aa">GPU (CUDA)</text>
+  <rect x="130" y="82" width="480" height="20" fill="url(#bar1)" rx="3"/>
+  <text x="620" y="96" font-family="'Courier New', monospace" font-size="13" font-weight="700" fill="#00d4aa">1,648 it/min</text>
+
+  <!-- CPU Bar -->
+  <text x="30" y="135" font-family="'Courier New', monospace" font-size="12" fill="#7a8a9a">CPU (4T)</text>
+  <rect x="130" y="122" width="6" height="20" fill="url(#bar2)" rx="3"/>
+  <text x="145" y="136" font-family="'Courier New', monospace" font-size="13" fill="#7a8a9a">20 it/min</text>
+
+  <!-- Multiplier callout -->
+  <text x="400" y="175" font-family="'Segoe UI', Arial, sans-serif" font-size="13" fill="#00d4aa" text-anchor="middle" opacity="0.7">82x faster  ·  10.6 it/min per watt</text>
+
+  <rect x="0" y="199" width="700" height="1" fill="#1e2830"/>
+</svg>

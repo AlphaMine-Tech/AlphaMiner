@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="280" viewBox="0 0 500 280">
+  <defs>
+    <linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#080b0f;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#0e1318;stop-opacity:1"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="500" height="280" fill="url(#abg)" rx="8"/>
+
+  <!-- AlphaMiner Host box -->
+  <rect x="60" y="20" width="380" height="120" rx="6" fill="none" stroke="#1e2830" stroke-width="1.5"/>
+  <text x="250" y="42" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="13" font-weight="600" fill="#e8edf2">AlphaMiner Host</text>
+
+  <!-- CPU box -->
+  <rect x="90" y="55" width="140" height="65" rx="4" fill="none" stroke="#7a8a9a" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="160" y="82" text-anchor="middle" font-family="'Courier New', monospace" font-size="11" fill="#7a8a9a">CPU Threads</text>
+  <text x="160" y="100" text-anchor="middle" font-family="'Courier New', monospace" font-size="10" fill="#7a8a9a" opacity="0.6">(optional)</text>
+
+  <!-- GPU box -->
+  <rect x="270" y="55" width="140" height="65" rx="4" fill="none" stroke="#00d4aa" stroke-width="1.2"/>
+  <text x="340" y="82" text-anchor="middle" font-family="'Courier New', monospace" font-size="11" fill="#00d4aa">GPU Kernel</text>
+  <text x="340" y="100" text-anchor="middle" font-family="'Courier New', monospace" font-size="10" fill="#00d4aa" opacity="0.6">(CUDA)</text>
+
+  <!-- Arrow down from host -->
+  <line x1="250" y1="140" x2="250" y2="170" stroke="#7a8a9a" stroke-width="1.2"/>
+  <polygon points="244,167 250,177 256,167" fill="#7a8a9a"/>
+
+  <!-- Qatum Protocol label -->
+  <text x="250" y="193" text-anchor="middle" font-family="'Courier New', monospace" font-size="11" fill="#7a8a9a">Qatum Protocol</text>
+
+  <!-- Arrow down to pool -->
+  <line x1="250" y1="200" x2="250" y2="220" stroke="#7a8a9a" stroke-width="1.2"/>
+  <polygon points="244,217 250,227 256,217" fill="#7a8a9a"/>
+
+  <!-- AlphaPool box -->
+  <rect x="170" y="228" width="160" height="36" rx="4" fill="none" stroke="#00d4aa" stroke-width="1.2"/>
+  <text x="250" y="248" text-anchor="middle" font-family="'Segoe UI', Arial, sans-serif" font-size="12" font-weight="600" fill="#00d4aa">AlphaPool</text>
+  <text x="250" y="260" text-anchor="middle" font-family="'Courier New', monospace" font-size="9" fill="#7a8a9a">:7777 Qatum</text>
+</svg>
