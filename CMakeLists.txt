@@ -10,23 +10,42 @@ if(CMAKE_BUILD_TYPE MATCHES DEBUG)
 endif()
 
 option(ENABLE_AVX512 "Enable AVX512 instruction set" OFF)
+option(ENABLE_CUDA "Enable CUDA GPU mining" OFF)
 
 # Additional cmake flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mrdrnd -mbmi -mavx2 -mpopcnt -march=znver2")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mrdrnd -mbmi -march=native -mtune=native -funroll-loops")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mrdrnd -mbmi")
     if(ENABLE_AVX512)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx512f")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 else()
-    message(FATAL "Unsupported compiler.")
+    message(FATAL_ERROR "Unsupported compiler.")
 endif()
 
-# Main executable
-add_executable(${PROJECT_NAME} src/AlphaMiner.cpp src/keyUtils.cpp)
+if(ENABLE_CUDA)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_ARCHITECTURES 86)
 
-include_directories(${PROJECT_NAME} ./src)
+    add_executable(${PROJECT_NAME}
+        src/AlphaMiner.cpp
+        src/keyUtils.cpp
+        src/cuda/mining_kernel.cu
+        src/cuda/gpu_miner.cu
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE ENABLE_CUDA)
+    target_include_directories(${PROJECT_NAME} PRIVATE src src/cuda)
+
+    # Pass host compiler flags to CUDA
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -Xcompiler=-mrdrnd,-mbmi>
+    )
+else()
+    add_executable(${PROJECT_NAME} src/AlphaMiner.cpp src/keyUtils.cpp)
+    include_directories(${PROJECT_NAME} ./src)
+endif()
 
 # Linking
 if(WIN32)

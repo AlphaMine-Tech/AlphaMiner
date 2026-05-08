@@ -26,6 +26,9 @@
 
 #include "K12AndKeyUtil.h"
 #include "keyUtils.h"
+#ifdef ENABLE_CUDA
+#include "cuda/gpu_miner.h"
+#endif
 
 using json = nlohmann::json;
 using namespace std;
@@ -113,23 +116,13 @@ void random2(
 
 char *nodeIp = NULL;
 int nodePort = 0;
-// HyperIdentity algorithm parameters (nonce[0] even)
-static constexpr unsigned long long HI_K = 512;   // input neurons
-static constexpr unsigned long long HI_L = 512;   // output neurons
-static constexpr unsigned long long HI_N = 1000;  // ticks
-static constexpr unsigned long long HI_2M = 728;  // neighbors (must be even)
-static constexpr unsigned long long HI_S = 150;   // mutations
-static constexpr unsigned long long HI_P = HI_K + HI_L + HI_S; // population threshold
-static constexpr unsigned int HI_THRESHOLD = 321;
-
-// Addition algorithm parameters (nonce[0] odd)
-static constexpr unsigned long long ADD_K = 14;    // input neurons
-static constexpr unsigned long long ADD_L = 8;     // output neurons
-static constexpr unsigned long long ADD_N = 1000;  // ticks
-static constexpr unsigned long long ADD_2M = 728;  // max neighbors (must be even)
-static constexpr unsigned long long ADD_S = 500;   // mutations
-static constexpr unsigned long long ADD_P = ADD_K + ADD_L + ADD_S; // population threshold
-static constexpr unsigned int ADD_THRESHOLD = 75700;
+static constexpr unsigned long long NUMBER_OF_INPUT_NEURONS = 256;  // K
+static constexpr unsigned long long NUMBER_OF_OUTPUT_NEURONS = 256; // L
+static constexpr unsigned long long NUMBER_OF_TICKS = 120;          // N
+static constexpr unsigned long long MAX_NEIGHBOR_NEURONS = 256;     // 2M. Must divided by 2
+static constexpr unsigned long long NUMBER_OF_MUTATIONS = 100;
+static constexpr unsigned long long POPULATION_THRESHOLD = NUMBER_OF_INPUT_NEURONS + NUMBER_OF_OUTPUT_NEURONS + NUMBER_OF_MUTATIONS; // P
+static constexpr unsigned int SOLUTION_THRESHOLD = NUMBER_OF_OUTPUT_NEURONS * 4 / 5;
 
 static int SUBSCRIBE = 1;
 static int NEW_COMPUTOR_ID = 2;
@@ -201,19 +194,20 @@ struct Miner
     static_assert(numberOfNeurons > numberOfNeighbors, "Number of neurons must be greater than the number of neighbors");
 
     std::vector<unsigned char> poolVec;
+    unsigned char lastKnownSeed[32] = {0};
 
     bool updateLatestQatumData()
     {
-        bool seedChanged = memcmp(this->currentRandomSeed, ::randomSeed, sizeof(currentRandomSeed)) != 0;
-        memcpy(this->currentRandomSeed, ::randomSeed, sizeof(currentRandomSeed));
         memcpy(this->computorPublicKey, ::computorPublicKey, sizeof(computorPublicKey));
         this->difficulty = ::difficulty;
+        setComputorPublicKey(this->computorPublicKey);
 
-        if (seedChanged && !isZeros<32>(this->currentRandomSeed))
+        // Only regenerate pool when seed changes
+        if (memcmp(this->currentRandomSeed, ::randomSeed, 32) != 0)
         {
+            memcpy(this->currentRandomSeed, ::randomSeed, sizeof(currentRandomSeed));
             generateRandom2Pool(this->currentRandomSeed, poolVec.data());
         }
-        setComputorPublicKey(this->computorPublicKey);
 
         return !isZeros<32>(this->computorPublicKey) && !isZeros<32>(this->currentRandomSeed) && this->difficulty != 0;
     }
@@ -305,119 +299,6 @@ struct Miner
     char outputNeuronExpectedValue[numberOfOutputNeurons];
 
     long long neuronValueBuffer[maxNumberOfNeurons];
-
-    // --- Bitmask optimization data ---
-    // Neuron bitmasks with circular padding (radius on each side)
-    static constexpr unsigned long long neuronRadius = numberOfNeighbors / 2;
-    static constexpr unsigned long long windowBits = numberOfNeighbors + 1; // includes self-position (always zero)
-    static constexpr unsigned long long windowQwords = (windowBits + 63) / 64;
-    // Padded neuron array: radius + maxPop + radius bits
-    static constexpr unsigned long long maxPaddedBits = populationThreshold + 2 * neuronRadius;
-    static constexpr unsigned long long maxPaddedQwords = (maxPaddedBits + 63) / 64 + 1; // +1 for safe unaligned load
-
-    unsigned long long neuronPlusBits[maxPaddedQwords];
-    unsigned long long neuronMinusBits[maxPaddedQwords];
-    // Incoming synapse bitmasks per target neuron (windowQwords per neuron)
-    unsigned long long inSynPlusBits[populationThreshold * windowQwords];
-    unsigned long long inSynMinusBits[populationThreshold * windowQwords];
-    // Buffer for new neuron values during tick
-    char neuronTickBuffer[populationThreshold];
-
-    // Load 64 bits starting at arbitrary bit position from a qword array
-    static inline unsigned long long loadBits64(const unsigned long long *data, unsigned long long bitStart)
-    {
-        unsigned long long wordIdx = bitStart / 64;
-        unsigned long long bitOff = bitStart % 64;
-        if (bitOff == 0)
-            return data[wordIdx];
-        return (data[wordIdx] >> bitOff) | (data[wordIdx + 1] << (64 - bitOff));
-    }
-
-    void packNeuronBitmasks()
-    {
-        unsigned long long pop = currentANN.population;
-        memset(neuronPlusBits, 0, sizeof(neuronPlusBits));
-        memset(neuronMinusBits, 0, sizeof(neuronMinusBits));
-
-        // Pack actual neurons at positions [radius, radius + pop)
-        for (unsigned long long i = 0; i < pop; i++)
-        {
-            unsigned long long paddedIdx = i + neuronRadius;
-            char val = currentANN.neurons[i].value;
-            if (val > 0)
-                neuronPlusBits[paddedIdx / 64] |= (1ULL << (paddedIdx % 64));
-            else if (val < 0)
-                neuronMinusBits[paddedIdx / 64] |= (1ULL << (paddedIdx % 64));
-        }
-
-        // Head circular padding: copy last `radius` neurons to positions [0, radius)
-        for (unsigned long long i = 0; i < neuronRadius; i++)
-        {
-            unsigned long long srcNeuron = pop - neuronRadius + i;
-            unsigned long long srcIdx = srcNeuron + neuronRadius;
-            unsigned long long dstIdx = i;
-            if (neuronPlusBits[srcIdx / 64] & (1ULL << (srcIdx % 64)))
-                neuronPlusBits[dstIdx / 64] |= (1ULL << (dstIdx % 64));
-            if (neuronMinusBits[srcIdx / 64] & (1ULL << (srcIdx % 64)))
-                neuronMinusBits[dstIdx / 64] |= (1ULL << (dstIdx % 64));
-        }
-
-        // Tail circular padding: copy first `radius` neurons to positions [radius+pop, radius+pop+radius)
-        for (unsigned long long i = 0; i < neuronRadius; i++)
-        {
-            unsigned long long srcIdx = i + neuronRadius;
-            unsigned long long dstIdx = neuronRadius + pop + i;
-            if (dstIdx / 64 < maxPaddedQwords)
-            {
-                if (neuronPlusBits[srcIdx / 64] & (1ULL << (srcIdx % 64)))
-                    neuronPlusBits[dstIdx / 64] |= (1ULL << (dstIdx % 64));
-                if (neuronMinusBits[srcIdx / 64] & (1ULL << (srcIdx % 64)))
-                    neuronMinusBits[dstIdx / 64] |= (1ULL << (dstIdx % 64));
-            }
-        }
-    }
-
-    void transposeAndPackSynapses()
-    {
-        unsigned long long pop = currentANN.population;
-        memset(inSynPlusBits, 0, pop * windowQwords * sizeof(unsigned long long));
-        memset(inSynMinusBits, 0, pop * windowQwords * sizeof(unsigned long long));
-
-        for (unsigned long long n = 0; n < pop; n++)
-        {
-            const Synapse *syn = getSynapses(n);
-            for (unsigned long long m = 0; m < numberOfNeighbors; m++)
-            {
-                char weight = syn[m].weight;
-                if (weight == 0) continue;
-
-                // Find target neuron of this outgoing synapse
-                long long target;
-                if (m < neuronRadius)
-                    target = (long long)n + (long long)m - (long long)neuronRadius;
-                else
-                    target = (long long)n + (long long)m + 1 - (long long)neuronRadius;
-
-                while (target < 0) target += pop;
-                while (target >= (long long)pop) target -= pop;
-
-                // Window position: source n is at offset (n - target) from target
-                long long diff = (long long)n - (long long)target;
-                if (diff < -(long long)(pop / 2)) diff += pop;
-                if (diff > (long long)(pop / 2)) diff -= pop;
-                // diff in [-radius, +radius], 0 = self (shouldn't happen since we skip self in outgoing)
-                unsigned long long pos = (unsigned long long)(diff + (long long)neuronRadius);
-
-                unsigned long long idx = target * windowQwords + pos / 64;
-                unsigned long long bit = pos % 64;
-
-                if (weight > 0)
-                    inSynPlusBits[idx] |= (1ULL << bit);
-                else
-                    inSynMinusBits[idx] |= (1ULL << bit);
-            }
-        }
-    }
 
     void mutate(unsigned char nonce[32], int mutateStep)
     {
@@ -755,85 +636,93 @@ struct Miner
         }
     }
 
-    void processTickBitmask()
+    void processTick()
     {
-        unsigned long long pop = currentANN.population;
+        unsigned long long population = currentANN.population;
+        Synapse *synapses = currentANN.synapses;
+        Neuron *neurons = currentANN.neurons;
 
-        // Pack neuron values into bitmasks
-        packNeuronBitmasks();
+        // Memset value of current one
+        memset(neuronValueBuffer, 0, sizeof(neuronValueBuffer));
 
-        // For each target neuron, compute weighted sum using bitmask AND + popcount
-        for (unsigned long long t = 0; t < pop; t++)
+        // Loop though all neurons
+        for (long long n = 0; n < population; ++n)
         {
-            long long score = 0;
-
-            const unsigned long long *sPlus = &inSynPlusBits[t * windowQwords];
-            const unsigned long long *sMinus = &inSynMinusBits[t * windowQwords];
-
-            // Neuron window starts at padded bit position t
-            for (unsigned long long q = 0; q < windowQwords; q++)
+            const Synapse *kSynapses = getSynapses(n);
+            long long neuronValue = neurons[n].value;
+            // Scan through all neighbor neurons and sum all connected neurons.
+            // The synapses are arranged as neuronIndex * numberOfNeighbors
+            for (long long m = 0; m < numberOfNeighbors; m++)
             {
-                unsigned long long nPlus = loadBits64(neuronPlusBits, t + q * 64);
-                unsigned long long nMinus = loadBits64(neuronMinusBits, t + q * 64);
+                char synapseWeight = kSynapses[m].weight;
+                unsigned long long nnIndex = 0;
+                if (m < numberOfNeighbors / 2)
+                {
+                    nnIndex = clampNeuronIndex(n + m, -(long long)numberOfNeighbors / 2);
+                }
+                else
+                {
+                    nnIndex = clampNeuronIndex(n + m + 1, -(long long)numberOfNeighbors / 2);
+                }
 
-                // Ternary multiply: (+1)*(+1)=+1, (-1)*(-1)=+1, (+1)*(-1)=-1, (-1)*(+1)=-1
-                unsigned long long plusBits = (nPlus & sPlus[q]) | (nMinus & sMinus[q]);
-                unsigned long long minusBits = (nPlus & sMinus[q]) | (nMinus & sPlus[q]);
-
-                score += __builtin_popcountll(plusBits) - __builtin_popcountll(minusBits);
+                // Weight-sum
+                neuronValueBuffer[nnIndex] += synapseWeight * neuronValue;
             }
-
-            // Branchless clamp to [-1, +1]
-            neuronTickBuffer[t] = (char)((score > 0) - (score < 0));
         }
 
-        // Write back to neurons
-        for (unsigned long long i = 0; i < pop; i++)
+        // Clamp the neuron value
+        for (long long n = 0; n < population; ++n)
         {
-            currentANN.neurons[i].value = neuronTickBuffer[i];
+            long long neuronValue = clampNeuron(neuronValueBuffer[n]);
+            neurons[n].value = neuronValue;
         }
     }
-
 
     void runTickSimulation()
     {
         unsigned long long population = currentANN.population;
+        Synapse *synapses = currentANN.synapses;
         Neuron *neurons = currentANN.neurons;
-
-        // Transpose synapses to incoming bitmask format
-        transposeAndPackSynapses();
 
         // Save the neuron value for comparison
         for (unsigned long long i = 0; i < population; ++i)
         {
+            // Backup the neuron value
             previousNeuronValue[i] = neurons[i].value;
         }
 
         for (unsigned long long tick = 0; tick < numberOfTicks; ++tick)
         {
-            processTickBitmask();
-
-            // Check exit conditions
+            processTick();
+            // Check exit conditions:
+            // - N ticks have passed (already in for loop)
+            // - All neuron values are unchanged
+            // - All output neurons have non-zero values
+            bool shouldExit = true;
             bool allNeuronsUnchanged = true;
-            bool allOutputNeuronsNonZero = true;
-            for (unsigned long long n = 0; n < population; ++n)
+            bool allOutputNeuronsIsNonZeros = true;
+            for (long long n = 0; n < population; ++n)
             {
+                // Neuron unchanged check
                 if (previousNeuronValue[n] != neurons[n].value)
                 {
                     allNeuronsUnchanged = false;
                 }
+
+                // Ouput neuron value check
                 if (neurons[n].type == Neuron::kOutput && neurons[n].value == 0)
                 {
-                    allOutputNeuronsNonZero = false;
+                    allOutputNeuronsIsNonZeros = false;
                 }
             }
 
-            if (allNeuronsUnchanged || allOutputNeuronsNonZero)
+            if (allOutputNeuronsIsNonZeros || allNeuronsUnchanged)
             {
                 break;
             }
 
-            for (unsigned long long n = 0; n < population; ++n)
+            // Copy the neuron value
+            for (long long n = 0; n < population; ++n)
             {
                 previousNeuronValue[n] = neurons[n].value;
             }
@@ -1096,769 +985,13 @@ int getSystemProcs()
     return 0;
 }
 
-// =============================================================================
-// Addition Algorithm Miner
-// Trains ANN on all 2^K (A+B=C) pairs. Score = total correct outputs across
-// all samples. Fundamentally different from HyperIdentity.
-// =============================================================================
-template <
-    unsigned long long numberOfInputNeurons,   // K (14)
-    unsigned long long numberOfOutputNeurons,  // L (8)
-    unsigned long long numberOfTicks,          // N (1000)
-    unsigned long long maxNumberOfNeighbors,   // 2M (728)
-    unsigned long long populationThreshold,    // P (522)
-    unsigned long long numberOfMutations,      // S (500)
-    unsigned int solutionThreshold>            // (75700)
-struct AdditionMiner
-{
-    unsigned char computorPublicKey[32];
-    unsigned char currentRandomSeed[32];
-    int difficulty;
-
-    static constexpr unsigned long long numberOfNeurons = numberOfInputNeurons + numberOfOutputNeurons;
-    static constexpr unsigned long long maxNumberOfNeurons = populationThreshold;
-    static constexpr unsigned long long maxNumberOfSynapses = populationThreshold * maxNumberOfNeighbors;
-    static constexpr unsigned long long trainingSetSize = 1ULL << numberOfInputNeurons; // 2^K = 16384
-    static constexpr unsigned long long paddingNumberOfSynapses = (maxNumberOfSynapses + 31) / 32 * 32;
-
-    static_assert(maxNumberOfSynapses <= (0xFFFFFFFFFFFFFFFF >> 1), "maxNumberOfSynapses overflow");
-    static_assert(maxNumberOfNeighbors % 2 == 0, "maxNumberOfNeighbors must be even");
-    static_assert(populationThreshold > numberOfNeurons, "populationThreshold must exceed numberOfNeurons");
-
-    std::vector<unsigned char> poolVec;
-
-    bool updateLatestQatumData()
-    {
-        bool seedChanged = memcmp(this->currentRandomSeed, ::randomSeed, sizeof(currentRandomSeed)) != 0;
-        memcpy(this->currentRandomSeed, ::randomSeed, sizeof(currentRandomSeed));
-        memcpy(this->computorPublicKey, ::computorPublicKey, sizeof(computorPublicKey));
-        this->difficulty = ::difficulty;
-        if (seedChanged && !isZeros<32>(this->currentRandomSeed))
-        {
-            generateRandom2Pool(this->currentRandomSeed, poolVec.data());
-        }
-        return !isZeros<32>(this->computorPublicKey) && !isZeros<32>(this->currentRandomSeed) && this->difficulty != 0;
-    }
-
-    static bool checkGlobalQatumDataAvailability()
-    {
-        return !isZeros<32>(::computorPublicKey) && !isZeros<32>(::randomSeed) && ::difficulty != 0;
-    }
-
-    void initialize(unsigned char miningSeed[32])
-    {
-        poolVec.resize(POOL_VEC_PADDING_SIZE);
-        generateRandom2Pool(miningSeed, poolVec.data());
-        generateTrainingSet();
-    }
-
-    typedef char Synapse;
-
-    struct ANN
-    {
-        unsigned char neuronTypes[maxNumberOfNeurons];
-        Synapse synapses[maxNumberOfSynapses];
-        unsigned long long population;
-    };
-
-    struct InitValue
-    {
-        unsigned long long outputNeuronPositions[numberOfOutputNeurons];
-        unsigned long long synapseWeight[paddingNumberOfSynapses / 32];
-        unsigned long long synpaseMutation[numberOfMutations];
-    };
-    static constexpr unsigned long long paddingInitValueSizeInBytes = (sizeof(InitValue) + 64 - 1) / 64 * 64;
-    unsigned char paddingInitValue[paddingInitValueSizeInBytes];
-
-    static constexpr unsigned char INPUT_NEURON_TYPE = 0;
-    static constexpr unsigned char OUTPUT_NEURON_TYPE = 1;
-    static constexpr unsigned char EVOLUTION_NEURON_TYPE = 2;
-
-    // Training data (generated once at init)
-    char trainingInputs[numberOfInputNeurons][trainingSetSize];
-    char trainingOutputs[numberOfOutputNeurons][trainingSetSize];
-
-    // Per-sample neuron values: neuronValues[neuronIdx][sampleIdx]
-    char *neuronValues;
-    char *prevNeuronValues;
-    char neuronValuesBuffer0[maxNumberOfNeurons * trainingSetSize];
-    char neuronValuesBuffer1[maxNumberOfNeurons * trainingSetSize];
-
-    // Sample tracking
-    unsigned int sampleMapping[trainingSetSize];
-    unsigned int sampleScores[trainingSetSize];
-    unsigned long long activeCount;
-
-    // ANN structures
-    ANN bestANN;
-    ANN currentANN;
-
-    // Index caches
-    unsigned long long neuronIndices[numberOfNeurons];
-    unsigned long long outputNeuronIndices[numberOfOutputNeurons];
-
-    // Temp buffers for training set generation
-    char inputBits[numberOfInputNeurons];
-    char outputBits[numberOfOutputNeurons];
-
-    // Convert integer to ternary bits: bit i = ((A >> i) & 1), then 0 -> -1, 1 -> 1
-    template <unsigned long long bitCount>
-    static void toTernaryBits(long long A, char *bits)
-    {
-        for (unsigned long long i = 0; i < bitCount; ++i)
-        {
-            char bitValue = static_cast<char>((A >> i) & 1);
-            bits[i] = (bitValue == 0) ? -1 : bitValue;
-        }
-    }
-
-    void generateTrainingSet()
-    {
-        static constexpr long long halfK = numberOfInputNeurons / 2;
-        static constexpr long long boundValue = (1LL << halfK) / 2;
-        memset(trainingInputs, 0, sizeof(trainingInputs));
-        memset(trainingOutputs, 0, sizeof(trainingOutputs));
-
-        unsigned long long sampleIdx = 0;
-        for (long long A = -boundValue; A < boundValue; A++)
-        {
-            for (long long B = -boundValue; B < boundValue; B++)
-            {
-                long long C = A + B;
-                toTernaryBits<halfK>(A, inputBits);
-                toTernaryBits<halfK>(B, inputBits + halfK);
-                toTernaryBits<numberOfOutputNeurons>(C, outputBits);
-
-                for (unsigned long long n = 0; n < numberOfInputNeurons; n++)
-                    trainingInputs[n][sampleIdx] = inputBits[n];
-                for (unsigned long long n = 0; n < numberOfOutputNeurons; n++)
-                    trainingOutputs[n][sampleIdx] = outputBits[n];
-
-                sampleIdx++;
-            }
-        }
-    }
-
-    // --- Dynamic neighbor helpers ---
-    unsigned long long getActualNeighborCount() const
-    {
-        unsigned long long pop = currentANN.population;
-        unsigned long long maxN = pop - 1;
-        return maxNumberOfNeighbors > maxN ? maxN : maxNumberOfNeighbors;
-    }
-    unsigned long long getLeftNeighborCount() const { return (getActualNeighborCount() + 1) / 2; }
-    unsigned long long getRightNeighborCount() const { return getActualNeighborCount() - getLeftNeighborCount(); }
-    unsigned long long getSynapseStartIndex() const
-    {
-        return maxNumberOfNeighbors / 2 - getLeftNeighborCount();
-    }
-    unsigned long long getSynapseEndIndex() const
-    {
-        return maxNumberOfNeighbors / 2 + getRightNeighborCount();
-    }
-
-    long long bufferIndexToOffset(unsigned long long bufferIdx) const
-    {
-        long long center = (long long)(maxNumberOfNeighbors / 2);
-        if ((long long)bufferIdx < center)
-            return (long long)bufferIdx - center;
-        else
-            return (long long)bufferIdx - center + 1;
-    }
-
-    long long offsetToBufferIndex(long long offset) const
-    {
-        long long center = (long long)(maxNumberOfNeighbors / 2);
-        if (offset == 0) return -1;
-        if (offset < 0) return center + offset;
-        return center + offset - 1;
-    }
-
-    long long getIndexInSynapsesBuffer(long long neighborOffset) const
-    {
-        long long leftCount = (long long)getLeftNeighborCount();
-        long long rightCount = (long long)getRightNeighborCount();
-        if (neighborOffset == 0 || neighborOffset < -leftCount || neighborOffset > rightCount)
-            return -1;
-        return offsetToBufferIndex(neighborOffset);
-    }
-
-    Synapse *getSynapses(unsigned long long neuronIndex)
-    {
-        return &currentANN.synapses[neuronIndex * maxNumberOfNeighbors];
-    }
-
-    unsigned long long clampNeuronIndex(long long neuronIdx, long long value) const
-    {
-        long long pop = (long long)currentANN.population;
-        long long nnIndex = neuronIdx + value;
-        nnIndex += (pop & (nnIndex >> 63));
-        long long over = nnIndex - pop;
-        nnIndex -= (pop & ~(over >> 63));
-        return (unsigned long long)nnIndex;
-    }
-
-    unsigned long long getNeighborNeuronIndex(unsigned long long neuronIndex, unsigned long long neighborOffset)
-    {
-        unsigned long long leftNeighbors = getLeftNeighborCount();
-        if (neighborOffset < leftNeighbors)
-            return clampNeuronIndex(neuronIndex + neighborOffset, -(long long)leftNeighbors);
-        else
-            return clampNeuronIndex(neuronIndex + neighborOffset + 1, -(long long)leftNeighbors);
-    }
-
-    // --- Neuron insertion ---
-    void insertNeuron(unsigned long long neuronIndex, unsigned long long synapseIndex)
-    {
-        unsigned long long oldStartIdx = getSynapseStartIndex();
-        unsigned long long oldEndIdx = getSynapseEndIndex();
-        long long oldLeftCount = (long long)getLeftNeighborCount();
-        long long oldRightCount = (long long)getRightNeighborCount();
-        constexpr unsigned long long halfMax = maxNumberOfNeighbors / 2;
-
-        Synapse *synapses = currentANN.synapses;
-        unsigned char *neuronTypes = currentANN.neuronTypes;
-        unsigned long long &population = currentANN.population;
-
-        unsigned long long insertedNeuronIdx = neuronIndex + 1;
-        char originalWeight = synapses[neuronIndex * maxNumberOfNeighbors + synapseIndex];
-
-        // Shift neurons right to make room
-        for (unsigned long long i = population; i > neuronIndex; --i)
-        {
-            neuronTypes[i] = neuronTypes[i - 1];
-            memcpy(getSynapses(i), getSynapses(i - 1), maxNumberOfNeighbors * sizeof(Synapse));
-        }
-        neuronTypes[insertedNeuronIdx] = EVOLUTION_NEURON_TYPE;
-        population++;
-
-        // Recalculate after population change
-        unsigned long long newActualNeighbors = getActualNeighborCount();
-        unsigned long long newStartIdx = getSynapseStartIndex();
-        unsigned long long newEndIdx = getSynapseEndIndex();
-
-        // Init inserted neuron's synapses to zero
-        Synapse *pInsert = getSynapses(insertedNeuronIdx);
-        memset(pInsert, 0, maxNumberOfNeighbors * sizeof(Synapse));
-
-        // Copy the original synapse weight
-        if (synapseIndex < halfMax)
-        {
-            if (synapseIndex > newStartIdx)
-                pInsert[synapseIndex - 1] = originalWeight;
-        }
-        else
-        {
-            pInsert[synapseIndex] = originalWeight;
-        }
-
-        // Update neighbor synapses
-        for (long long delta = -oldLeftCount; delta <= oldRightCount; ++delta)
-        {
-            if (delta == 0) continue;
-            unsigned long long updatedNeuronIdx = clampNeuronIndex(insertedNeuronIdx, delta);
-
-            long long insertedInNeighborList = -1;
-            for (unsigned long long k = 0; k < newActualNeighbors; k++)
-            {
-                if (getNeighborNeuronIndex(updatedNeuronIdx, k) == insertedNeuronIdx)
-                {
-                    insertedInNeighborList = (long long)(newStartIdx + k);
-                    break;
-                }
-            }
-            if (insertedInNeighborList < 0) continue;
-
-            Synapse *pUpdated = getSynapses(updatedNeuronIdx);
-            if (delta < 0)
-            {
-                for (long long k = (long long)newEndIdx - 1; k >= insertedInNeighborList; --k)
-                    pUpdated[k] = pUpdated[k - 1];
-                if (delta == -1)
-                    pUpdated[insertedInNeighborList] = 0;
-            }
-            else
-            {
-                for (long long k = (long long)newStartIdx; k < insertedInNeighborList; ++k)
-                    pUpdated[k] = pUpdated[k + 1];
-            }
-        }
-    }
-
-    // --- Neuron removal ---
-    void removeNeuron(unsigned long long neuronIdx)
-    {
-        long long leftCount = (long long)getLeftNeighborCount();
-        long long rightCount = (long long)getRightNeighborCount();
-        unsigned long long startIdx = getSynapseStartIndex();
-        unsigned long long endIdx = getSynapseEndIndex();
-        constexpr unsigned long long halfMax = maxNumberOfNeighbors / 2;
-
-        for (long long offset = -leftCount; offset <= rightCount; offset++)
-        {
-            if (offset == 0) continue;
-            unsigned long long nnIdx = clampNeuronIndex(neuronIdx, offset);
-            Synapse *pNN = getSynapses(nnIdx);
-            long long synIdx = getIndexInSynapsesBuffer(-offset);
-            if (synIdx < 0) continue;
-
-            if (synIdx >= (long long)halfMax)
-            {
-                for (long long k = synIdx; k < (long long)endIdx - 1; ++k)
-                    pNN[k] = pNN[k + 1];
-                pNN[endIdx - 1] = 0;
-            }
-            else
-            {
-                for (long long k = synIdx; k > (long long)startIdx; --k)
-                    pNN[k] = pNN[k - 1];
-                pNN[startIdx] = 0;
-            }
-        }
-
-        for (unsigned long long i = neuronIdx; i < currentANN.population - 1; i++)
-        {
-            currentANN.neuronTypes[i] = currentANN.neuronTypes[i + 1];
-            memcpy(getSynapses(i), getSynapses(i + 1), maxNumberOfNeighbors * sizeof(Synapse));
-        }
-        currentANN.population--;
-    }
-
-    // --- Redundancy detection and cleanup ---
-    unsigned long long removalNeurons[maxNumberOfNeurons];
-    unsigned long long numberOfRedundantNeurons;
-
-    unsigned long long scanRedundantNeurons()
-    {
-        unsigned long long pop = currentANN.population;
-        Synapse *synapses = currentANN.synapses;
-        unsigned long long startIdx = getSynapseStartIndex();
-        unsigned long long endIdx = getSynapseEndIndex();
-        long long leftCount = (long long)getLeftNeighborCount();
-        long long rightCount = (long long)getRightNeighborCount();
-
-        numberOfRedundantNeurons = 0;
-        for (unsigned long long i = 0; i < pop; i++)
-        {
-            if (currentANN.neuronTypes[i] != EVOLUTION_NEURON_TYPE) continue;
-
-            bool allOutZero = true;
-            for (unsigned long long m = startIdx; m < endIdx && allOutZero; m++)
-                if (synapses[i * maxNumberOfNeighbors + m] != 0)
-                    allOutZero = false;
-
-            bool allInZero = true;
-            for (long long off = -leftCount; off <= rightCount && allInZero; off++)
-            {
-                if (off == 0) continue;
-                unsigned long long nnIdx = clampNeuronIndex(i, off);
-                long long synIdx = getIndexInSynapsesBuffer(-off);
-                if (synIdx < 0) continue;
-                if (getSynapses(nnIdx)[synIdx] != 0)
-                    allInZero = false;
-            }
-
-            if (allOutZero || allInZero)
-                removalNeurons[numberOfRedundantNeurons++] = i;
-        }
-        return numberOfRedundantNeurons;
-    }
-
-    void cleanANN()
-    {
-        for (unsigned long long i = 0; i < numberOfRedundantNeurons; i++)
-        {
-            removeNeuron(removalNeurons[i]);
-            for (unsigned long long j = i + 1; j < numberOfRedundantNeurons; j++)
-                removalNeurons[j]--;
-        }
-    }
-
-    // --- Mutation ---
-    void mutate(unsigned long long mutateStep)
-    {
-        unsigned long long pop = currentANN.population;
-        unsigned long long actualNeighbors = getActualNeighborCount();
-        Synapse *synapses = currentANN.synapses;
-        InitValue *initValue = (InitValue *)paddingInitValue;
-
-        unsigned long long synapseMutation = initValue->synpaseMutation[mutateStep];
-        unsigned long long totalValidSynapses = pop * actualNeighbors;
-        unsigned long long flatIdx = (synapseMutation >> 1) % totalValidSynapses;
-
-        unsigned long long neuronIdx = flatIdx / actualNeighbors;
-        unsigned long long localSynapseIdx = flatIdx % actualNeighbors;
-        unsigned long long synapseIndex = localSynapseIdx + getSynapseStartIndex();
-        unsigned long long synapseFullIdx = neuronIdx * maxNumberOfNeighbors + synapseIndex;
-
-        char weightChange = ((synapseMutation & 1ULL) == 0) ? (char)-1 : (char)1;
-        char newWeight = synapses[synapseFullIdx] + weightChange;
-
-        if (newWeight >= -1 && newWeight <= 1)
-            synapses[synapseFullIdx] = newWeight;
-        else
-            insertNeuron(neuronIdx, synapseIndex);
-
-        while (scanRedundantNeurons() > 0)
-            cleanANN();
-    }
-
-    // --- Tick simulation (scalar, processes all samples) ---
-    void loadTrainingData()
-    {
-        unsigned long long pop = currentANN.population;
-        unsigned long long inputIdx = 0;
-        for (unsigned long long n = 0; n < pop; n++)
-        {
-            char *nv = &neuronValues[n * trainingSetSize];
-            char *pnv = &prevNeuronValues[n * trainingSetSize];
-            if (currentANN.neuronTypes[n] == INPUT_NEURON_TYPE)
-            {
-                memcpy(nv, trainingInputs[inputIdx], trainingSetSize);
-                memcpy(pnv, trainingInputs[inputIdx], trainingSetSize);
-                inputIdx++;
-            }
-            else
-            {
-                memset(nv, 0, trainingSetSize);
-                memset(pnv, 0, trainingSetSize);
-            }
-        }
-    }
-
-    // Precompute incoming positive/negative synapse sources for each neuron
-    unsigned int incomingPositiveSource[maxNumberOfNeurons * maxNumberOfNeighbors];
-    unsigned int incomingNegativeSource[maxNumberOfNeurons * maxNumberOfNeighbors];
-    unsigned int incomingPositiveCount[maxNumberOfNeurons];
-    unsigned int incomingNegativeCount[maxNumberOfNeurons];
-
-    void convertToIncomingSynapses()
-    {
-        unsigned long long pop = currentANN.population;
-        Synapse *synapses = currentANN.synapses;
-        unsigned long long startIdx = getSynapseStartIndex();
-        unsigned long long endIdx = getSynapseEndIndex();
-
-        memset(incomingPositiveCount, 0, sizeof(incomingPositiveCount));
-        memset(incomingNegativeCount, 0, sizeof(incomingNegativeCount));
-
-        for (unsigned long long n = 0; n < pop; n++)
-        {
-            const Synapse *kSynapses = &synapses[n * maxNumberOfNeighbors];
-            for (unsigned long long synIdx = startIdx; synIdx < endIdx; synIdx++)
-            {
-                char weight = kSynapses[synIdx];
-                if (weight == 0) continue;
-                long long offset = bufferIndexToOffset(synIdx);
-                unsigned long long nnIndex = clampNeuronIndex((long long)n, offset);
-
-                if (weight > 0)
-                {
-                    unsigned int idx = incomingPositiveCount[nnIndex]++;
-                    incomingPositiveSource[nnIndex * maxNumberOfNeighbors + idx] = (unsigned int)n;
-                }
-                else
-                {
-                    unsigned int idx = incomingNegativeCount[nnIndex]++;
-                    incomingNegativeSource[nnIndex * maxNumberOfNeighbors + idx] = (unsigned int)n;
-                }
-            }
-        }
-    }
-
-    // Cache output and evolution neuron indices
-    unsigned long long outputNeuronIdxCache[numberOfOutputNeurons];
-    unsigned long long numCachedOutputs;
-    unsigned long long evolutionNeuronIdxCache[numberOfMutations];
-    unsigned long long numCachedEvolution;
-    // Pre-multiplied offsets for neuron data access
-    unsigned long long processNeuronOffsets[maxNumberOfNeurons];
-    unsigned long long numProcessNeurons;
-
-    // Accumulator buffer for auto-vectorized tick processing
-    alignas(32) short neuronAccBuffer[trainingSetSize];
-
-    void cacheNeuronIndices()
-    {
-        numCachedOutputs = 0;
-        numCachedEvolution = 0;
-        numProcessNeurons = 0;
-        for (unsigned long long i = 0; i < currentANN.population; i++)
-        {
-            if (currentANN.neuronTypes[i] == OUTPUT_NEURON_TYPE)
-            {
-                outputNeuronIdxCache[numCachedOutputs++] = i;
-                processNeuronOffsets[numProcessNeurons++] = i;
-            }
-            else if (currentANN.neuronTypes[i] == EVOLUTION_NEURON_TYPE)
-            {
-                evolutionNeuronIdxCache[numCachedEvolution++] = i;
-                processNeuronOffsets[numProcessNeurons++] = i;
-            }
-        }
-    }
-
-    void processNeuronTick(unsigned long long targetNeuron, unsigned long long activeSampleCount)
-    {
-        unsigned int numPos = incomingPositiveCount[targetNeuron];
-        unsigned int numNeg = incomingNegativeCount[targetNeuron];
-        char *dst = &neuronValues[targetNeuron * trainingSetSize];
-        const unsigned int *posSrc = &incomingPositiveSource[targetNeuron * maxNumberOfNeighbors];
-        const unsigned int *negSrc = &incomingNegativeSource[targetNeuron * maxNumberOfNeighbors];
-
-        // Source-outer loop enables auto-vectorization across samples
-        // Use int16 accumulator (safe for up to 32767 sources)
-        memset(neuronAccBuffer, 0, activeSampleCount * sizeof(short));
-
-        for (unsigned int i = 0; i < numPos; i++)
-        {
-            const char *srcData = &prevNeuronValues[(unsigned long long)posSrc[i] * trainingSetSize];
-            for (unsigned long long s = 0; s < activeSampleCount; s++)
-                neuronAccBuffer[s] += srcData[s];
-        }
-        for (unsigned int i = 0; i < numNeg; i++)
-        {
-            const char *srcData = &prevNeuronValues[(unsigned long long)negSrc[i] * trainingSetSize];
-            for (unsigned long long s = 0; s < activeSampleCount; s++)
-                neuronAccBuffer[s] -= srcData[s];
-        }
-
-        // Clamp to [-1, +1]
-        for (unsigned long long s = 0; s < activeSampleCount; s++)
-        {
-            short v = neuronAccBuffer[s];
-            dst[s] = (char)((v > 0) - (v < 0));
-        }
-    }
-
-    void processTick(unsigned long long activeSampleCount)
-    {
-        for (unsigned long long idx = 0; idx < numCachedOutputs; ++idx)
-            processNeuronTick(outputNeuronIdxCache[idx], activeSampleCount);
-        for (unsigned long long idx = 0; idx < numCachedEvolution; ++idx)
-            processNeuronTick(evolutionNeuronIdxCache[idx], activeSampleCount);
-    }
-
-    // Compact active samples + score converged ones
-    void compactAndScore()
-    {
-        unsigned long long pop = currentANN.population;
-        unsigned long long writePos = 0;
-
-        for (unsigned long long s = 0; s < activeCount; s++)
-        {
-            // Check if all output+evolution neurons unchanged
-            bool allUnchanged = true;
-            for (unsigned long long i = 0; i < numCachedOutputs && allUnchanged; i++)
-            {
-                unsigned long long n = outputNeuronIdxCache[i];
-                if (neuronValues[n * trainingSetSize + s] != prevNeuronValues[n * trainingSetSize + s])
-                    allUnchanged = false;
-            }
-            for (unsigned long long i = 0; i < numCachedEvolution && allUnchanged; i++)
-            {
-                unsigned long long n = evolutionNeuronIdxCache[i];
-                if (neuronValues[n * trainingSetSize + s] != prevNeuronValues[n * trainingSetSize + s])
-                    allUnchanged = false;
-            }
-
-            // Check if all output neurons non-zero
-            bool allOutputsNonZero = true;
-            for (unsigned long long i = 0; i < numCachedOutputs && allOutputsNonZero; i++)
-            {
-                unsigned long long n = outputNeuronIdxCache[i];
-                if (neuronValues[n * trainingSetSize + s] == 0)
-                    allOutputsNonZero = false;
-            }
-
-            bool isDone = allUnchanged || allOutputsNonZero;
-
-            if (isDone)
-            {
-                // Score this sample
-                unsigned int origSample = sampleMapping[s];
-                for (unsigned long long i = 0; i < numCachedOutputs; i++)
-                {
-                    unsigned long long n = outputNeuronIdxCache[i];
-                    if (neuronValues[n * trainingSetSize + s] == trainingOutputs[i][origSample])
-                        sampleScores[origSample]++;
-                }
-            }
-            else
-            {
-                // Compact: move to writePos
-                if (writePos != s)
-                {
-                    sampleMapping[writePos] = sampleMapping[s];
-                    for (unsigned long long n = 0; n < pop; n++)
-                    {
-                        neuronValues[n * trainingSetSize + writePos] = neuronValues[n * trainingSetSize + s];
-                        prevNeuronValues[n * trainingSetSize + writePos] = prevNeuronValues[n * trainingSetSize + s];
-                    }
-                }
-                writePos++;
-            }
-        }
-        activeCount = writePos;
-    }
-
-    void runTickSimulation()
-    {
-        unsigned long long pop = currentANN.population;
-
-        // Init sample tracking
-        for (unsigned long long i = 0; i < trainingSetSize; i++)
-        {
-            sampleMapping[i] = (unsigned int)i;
-            sampleScores[i] = 0;
-        }
-        activeCount = trainingSetSize;
-
-        loadTrainingData();
-        cacheNeuronIndices();
-        convertToIncomingSynapses();
-
-        for (unsigned long long tick = 0; tick < numberOfTicks; ++tick)
-        {
-            if (activeCount == 0) break;
-
-            // Swap current/prev pointers
-            char *tmp = neuronValues;
-            neuronValues = prevNeuronValues;
-            prevNeuronValues = tmp;
-
-            processTick(activeCount);
-            compactAndScore();
-        }
-
-        // Score remaining active samples
-        for (unsigned long long s = 0; s < activeCount; s++)
-        {
-            unsigned int origSample = sampleMapping[s];
-            for (unsigned long long i = 0; i < numCachedOutputs; i++)
-            {
-                unsigned long long n = outputNeuronIdxCache[i];
-                if (neuronValues[n * trainingSetSize + s] == trainingOutputs[i][origSample])
-                    sampleScores[origSample]++;
-            }
-        }
-    }
-
-    unsigned int getTotalSamplesScore()
-    {
-        unsigned int total = 0;
-        for (unsigned long long i = 0; i < trainingSetSize; i++)
-            total += sampleScores[i];
-        return total;
-    }
-
-    void copyANN(ANN &dst, const ANN &src)
-    {
-        unsigned long long pop = src.population;
-        memcpy(dst.synapses, src.synapses, pop * maxNumberOfNeighbors * sizeof(Synapse));
-        memcpy(dst.neuronTypes, src.neuronTypes, pop);
-        dst.population = pop;
-    }
-
-    // --- Main scoring function ---
-    unsigned int initializeANN(unsigned char *publicKey, unsigned char *nonce)
-    {
-        unsigned char hash[32];
-        unsigned char combined[64];
-        memcpy(combined, publicKey, 32);
-        memcpy(combined + 32, nonce, 32);
-        KangarooTwelve(combined, 64, hash, 32);
-
-        unsigned long long &population = currentANN.population;
-        Synapse *synapses = currentANN.synapses;
-        unsigned char *neuronTypes = currentANN.neuronTypes;
-
-        population = numberOfNeurons;
-        neuronValues = neuronValuesBuffer0;
-        prevNeuronValues = neuronValuesBuffer1;
-
-        // Generate InitValue from random2
-        random2(hash, poolVec.data(), (unsigned char *)paddingInitValue, sizeof(InitValue));
-        InitValue *initValue = (InitValue *)paddingInitValue;
-
-        // Randomly assign neuron types
-        for (unsigned long long i = 0; i < population; ++i)
-        {
-            neuronIndices[i] = i;
-            neuronTypes[i] = INPUT_NEURON_TYPE;
-        }
-        unsigned long long neuronCount = population;
-        for (unsigned long long i = 0; i < numberOfOutputNeurons; ++i)
-        {
-            unsigned long long idx = initValue->outputNeuronPositions[i] % neuronCount;
-            neuronTypes[neuronIndices[idx]] = OUTPUT_NEURON_TYPE;
-            outputNeuronIndices[i] = neuronIndices[idx];
-            neuronCount--;
-            neuronIndices[idx] = neuronIndices[neuronCount];
-        }
-
-        // Synapse weight initialization via 2-bit LUT
-        {
-            const unsigned long long initSynapses = populationThreshold * maxNumberOfNeighbors;
-            const unsigned long long initSynapsesPadded = (initSynapses + 31) / 32 * 32;
-            for (unsigned long long i = 0; i < initSynapsesPadded / 32; ++i)
-            {
-                for (int j = 0; j < 32; ++j)
-                {
-                    unsigned long long idx = 32 * i + j;
-                    if (idx >= maxNumberOfSynapses) break;
-                    unsigned char ev = (unsigned char)((initValue->synapseWeight[i] >> (j * 2)) & 3);
-                    synapses[idx] = (ev == 2) ? (char)-1 : (ev == 3) ? (char)1 : (char)0;
-                }
-            }
-        }
-
-        // Run first inference
-        runTickSimulation();
-        unsigned int score = getTotalSamplesScore();
-        return score;
-    }
-
-    bool findSolution(unsigned char *publicKey, unsigned char *nonce)
-    {
-        unsigned int bestScore = initializeANN(publicKey, nonce);
-        copyANN(bestANN, currentANN);
-
-        for (unsigned long long s = 0; s < numberOfMutations; ++s)
-        {
-            mutate(s);
-
-            if (currentANN.population >= populationThreshold)
-                break;
-
-            runTickSimulation();
-            unsigned int score = getTotalSamplesScore();
-
-            if (score >= bestScore)
-            {
-                bestScore = score;
-                copyANN(bestANN, currentANN);
-            }
-            else
-            {
-                copyANN(currentANN, bestANN);
-            }
-        }
-
-        return bestScore >= solutionThreshold;
-    }
-};
-
-typedef Miner<HI_K, HI_L, HI_N, HI_2M, HI_P, HI_S, HI_THRESHOLD> HyperIdentityMiner;
-typedef AdditionMiner<ADD_K, ADD_L, ADD_N, ADD_2M, ADD_P, ADD_S, ADD_THRESHOLD> AdditionMinerType;
+typedef Miner<NUMBER_OF_INPUT_NEURONS, NUMBER_OF_OUTPUT_NEURONS, NUMBER_OF_TICKS, MAX_NEIGHBOR_NEURONS, POPULATION_THRESHOLD, NUMBER_OF_MUTATIONS, SOLUTION_THRESHOLD> ActiveMiner;
 
 int miningThreadProc()
 {
-    auto hiMiner = std::make_unique<HyperIdentityMiner>();
-    auto addMiner = std::make_unique<AdditionMinerType>();
-    hiMiner->initialize(randomSeed);
-    hiMiner->setComputorPublicKey(computorPublicKey);
-    addMiner->initialize(randomSeed);
+    std::unique_ptr<ActiveMiner> miner(new ActiveMiner());
+    miner->initialize(randomSeed);
+    miner->setComputorPublicKey(computorPublicKey);
 
     std::array<unsigned char, 32> nonce;
     while (!state)
@@ -1867,40 +1000,22 @@ int miningThreadProc()
         _rdrand64_step((unsigned long long *)&nonce.data()[8]);
         _rdrand64_step((unsigned long long *)&nonce.data()[16]);
         _rdrand64_step((unsigned long long *)&nonce.data()[24]);
-
-        bool isAddition = (nonce[0] & 1) != 0;
-        bool ready = false;
-        bool found = false;
-
-        if (isAddition)
+        if (miner->updateLatestQatumData())
         {
-            ready = addMiner->updateLatestQatumData();
-            if (ready)
+            if (miner->findSolution(miner->computorPublicKey, nonce.data()))
             {
-                found = addMiner->findSolution(addMiner->computorPublicKey, nonce.data());
-            }
-        }
-        else
-        {
-            ready = hiMiner->updateLatestQatumData();
-            if (ready)
-            {
-                found = hiMiner->findSolution(hiMiner->computorPublicKey, nonce.data());
-            }
-        }
-
-        if (ready)
-        {
-            if (found)
-            {
-                std::lock_guard<std::mutex> guard(foundNonceLock);
-                foundNonce.push(nonce);
+                {
+                    std::lock_guard<std::mutex> guard(foundNonceLock);
+                    foundNonce.push(nonce);
+                }
                 numberOfFoundSolutions++;
             }
+
             numberOfMiningIterations++;
         }
         else
         {
+            // no data to mine
             std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
         }
     }
@@ -2111,25 +1226,7 @@ void handleQatumData(std::string data)
 
 static const char *DEFAULT_POOL_IP = "131.106.76.202";
 static const int DEFAULT_POOL_PORT = 7777;
-static const char *ALPHAMINER_VERSION = "0.3.0";
-
-// Dev fee: 1.5% of mining time is donated to AlphaMine Tech
-static const char *DEV_FEE_WALLET       = "RUKOLBBAMNYACAVTVHWKOZZGUQJDIJBOEUXAXLKCGEMPXMSVTCXDSBGGQLMM";
-static const unsigned long long DEV_FEE_CYCLE_SECS = 1000; // 1000 second cycle
-static const unsigned long long DEV_FEE_DEV_SECS   = 15;   // 15/1000 = 1.5%
-static const unsigned long long DEV_FEE_USER_SECS  = 985;  // 985/1000 = 98.5%
-
-bool connectAndSubscribe(ServerSocket &sock, const char *walletAddr, const char *workerName)
-{
-    if (!sock.establishConnection(nodeIp))
-        return false;
-    json sub;
-    sub["id"] = 1;
-    sub["wallet"] = walletAddr;
-    sub["worker"] = workerName;
-    std::string s = sub.dump() + "\n";
-    return sock.sendData((char *)s.c_str(), s.size());
-}
+static const char *ALPHAMINER_VERSION = "0.2.0";
 
 int main(int argc, char *argv[])
 {
@@ -2149,102 +1246,148 @@ int main(int argc, char *argv[])
 
     if (argc < 3)
     {
-        printf("Usage:   AlphaMiner <Wallet> <Worker> [Threads] [Pool IP] [Pool Port]\n\n");
-        printf("  Wallet    Your 60-character Qubic address\n");
-        printf("  Worker    Worker name (e.g. rig01)\n");
-        printf("  Threads   CPU threads (default: all cores)\n");
-        printf("  Pool IP   Qatum pool IP (default: %s)\n", DEFAULT_POOL_IP);
-        printf("  Pool Port Qatum pool port (default: %d)\n\n", DEFAULT_POOL_PORT);
-        printf("Example:\n");
-        printf("  AlphaMiner EQVUBBETJJUY...MAGTFPF rig01 32\n\n");
+        printf("Usage:   AlphaMiner <Wallet> <Worker> [Options]\n\n");
+        printf("  Wallet     Your 60-character Qubic address\n");
+        printf("  Worker     Worker name (e.g. rig01)\n\n");
+        printf("Options:\n");
+        printf("  -t N       CPU threads (default: all cores, 0 = disable CPU mining)\n");
+        printf("  -p IP:PORT Pool address (default: %s:%d)\n", DEFAULT_POOL_IP, DEFAULT_POOL_PORT);
+#ifdef ENABLE_CUDA
+        printf("  -g N       GPU threads per batch (default: 128, 0 = disable GPU)\n");
+#endif
+        printf("\nExamples:\n");
+        printf("  AlphaMiner EQVUBBETJJUY...MAGTFPF rig01 -t 58\n");
+#ifdef ENABLE_CUDA
+        printf("  AlphaMiner EQVUBBETJJUY...MAGTFPF rig01 -t 58 -g 128   (hybrid CPU+GPU)\n");
+        printf("  AlphaMiner EQVUBBETJJUY...MAGTFPF rig01 -t 0 -g 256    (GPU only)\n");
+        printf("  AlphaMiner EQVUBBETJJUY...MAGTFPF rig01 -t 32 -g 0     (CPU only)\n");
+#endif
+        printf("\n");
         return 1;
     }
 
     char *wallet = argv[1];
     char *worker = argv[2];
-    bool inDevFee = false;
 
-    unsigned int numberOfThreads = 0;
-    if (argc >= 4)
+    // Defaults
+    unsigned int numberOfThreads = std::thread::hardware_concurrency();
+    if (numberOfThreads == 0) numberOfThreads = 4;
+    nodeIp = (char *)DEFAULT_POOL_IP;
+    nodePort = DEFAULT_POOL_PORT;
+    int gpuThreads = 0;
+#ifdef ENABLE_CUDA
+    gpuThreads = 128;
+#endif
+
+    // Parse options
+    for (int i = 3; i < argc; i++)
     {
-        numberOfThreads = atoi(argv[3]);
-    }
-    if (numberOfThreads == 0)
-    {
-        numberOfThreads = std::thread::hardware_concurrency();
-        if (numberOfThreads == 0) numberOfThreads = 4;
+        if (strcmp(argv[i], "-t") == 0 && i + 1 < argc)
+        {
+            numberOfThreads = atoi(argv[++i]);
+        }
+        else if (strcmp(argv[i], "-g") == 0 && i + 1 < argc)
+        {
+            gpuThreads = atoi(argv[++i]);
+        }
+        else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc)
+        {
+            char *poolArg = argv[++i];
+            char *colon = strrchr(poolArg, ':');
+            if (colon)
+            {
+                *colon = '\0';
+                nodeIp = poolArg;
+                nodePort = atoi(colon + 1);
+            }
+            else
+            {
+                nodeIp = poolArg;
+            }
+        }
+        else
+        {
+            // Legacy positional args support: [Threads] [Pool IP] [Pool Port]
+            if (i == 3) numberOfThreads = atoi(argv[i]);
+            else if (i == 4) nodeIp = argv[i];
+            else if (i == 5) nodePort = atoi(argv[i]);
+        }
     }
 
-    if (argc >= 5)
+#ifndef ENABLE_CUDA
+    if (gpuThreads > 0)
     {
-        nodeIp = argv[4];
+        printf("[!] GPU mining requested but this binary was compiled without CUDA support.\n");
+        printf("[!] Rebuild with: cmake .. -DENABLE_CUDA=ON\n");
+        gpuThreads = 0;
     }
-    else
-    {
-        nodeIp = (char *)DEFAULT_POOL_IP;
-    }
-
-    if (argc >= 6)
-    {
-        nodePort = std::atoi(argv[5]);
-    }
-    else
-    {
-        nodePort = DEFAULT_POOL_PORT;
-    }
+#endif
 
     setbuf(stdout, NULL);
-    printf("  Pool:    %s:%d\n", nodeIp, nodePort);
-    printf("  Wallet:  %.15s...%.7s\n", wallet, wallet + strlen(wallet) - 7);
-    printf("  Worker:  %s\n", worker);
-    printf("  Threads: %u\n\n", numberOfThreads);
+    printf("  Pool:       %s:%d\n", nodeIp, nodePort);
+    printf("  Wallet:     %.15s...%.7s\n", wallet, wallet + strlen(wallet) - 7);
+    printf("  Worker:     %s\n", worker);
+    printf("  CPU Threads: %u%s\n", numberOfThreads, numberOfThreads == 0 ? " (disabled)" : "");
+#ifdef ENABLE_CUDA
+    printf("  GPU Threads: %d%s\n", gpuThreads, gpuThreads == 0 ? " (disabled)" : "");
+    if (numberOfThreads > 0 && gpuThreads > 0)
+        printf("  Mode:       \033[1;32mHybrid CPU+GPU\033[0m\n");
+    else if (gpuThreads > 0)
+        printf("  Mode:       \033[1;36mGPU only\033[0m\n");
+    else
+        printf("  Mode:       CPU only\n");
+#endif
+    printf("\n");
 
+    json j;
+    j["id"] = 1;
+    j["wallet"] = wallet;
+    j["worker"] = worker;
+    std::string s = j.dump() + "\n";
+    char *buffer = new char[s.size() + 1];
+    memcpy(buffer, s.c_str(), s.size());
     ServerSocket serverSocket;
-    if (!connectAndSubscribe(serverSocket, wallet, worker))
+    bool ok = serverSocket.establishConnection(nodeIp);
+    if (!ok)
     {
         printf("[!] Failed to connect to pool at %s:%d\n", nodeIp, nodePort);
         return 1;
     }
     printf("[+] Connected to pool\n");
+    serverSocket.sendData(buffer, s.size());
+    delete[] buffer;
 
     consoleCtrlHandler();
 
     {
-        miningThreads.resize(numberOfThreads);
-        for (unsigned int i = numberOfThreads; i-- > 0;)
+        // Launch CPU mining threads
+        if (numberOfThreads > 0)
         {
-            miningThreads.emplace_back(miningThreadProc);
+            for (unsigned int i = 0; i < numberOfThreads; i++)
+                miningThreads.emplace_back(miningThreadProc);
+            printf("[+] Started %u CPU mining threads\n", numberOfThreads);
         }
+
+#ifdef ENABLE_CUDA
+        // Initialize GPU miner
+        GpuMiner *gpuMiner = nullptr;
+        unsigned char lastSeed[32] = {0};
+        unsigned char lastPubKey[32] = {0};
+
+        if (gpuThreads > 0)
+        {
+            gpuMiner = new GpuMiner(0, gpuThreads);
+        }
+#endif
 
         auto timestamp = std::chrono::steady_clock::now();
         long long prevNumberOfMiningIterations = 0;
         long long lastIts = 0;
         unsigned long long loopCount = 0;
+
         while (!state)
         {
-            // Dev fee: switch pool wallet for 1.5% of mining time
-            {
-                unsigned long long cyclePos = loopCount % DEV_FEE_CYCLE_SECS;
-                bool shouldBeDevFee = (cyclePos >= DEV_FEE_USER_SECS);
-                if (shouldBeDevFee != inDevFee)
-                {
-                    inDevFee = shouldBeDevFee;
-                    serverSocket.closeConnection();
-                    memset(computorPublicKey, 0, sizeof(computorPublicKey));
-                    memset(randomSeed, 0, sizeof(randomSeed));
-                    difficulty = 0;
-                    qatumBuffer = "";
-                    { std::lock_guard<std::mutex> g(foundNonceLock); while (!foundNonce.empty()) foundNonce.pop(); }
-                    const char *connectWallet = inDevFee ? DEV_FEE_WALLET : wallet;
-                    for (int attempt = 0; attempt < 3; attempt++)
-                    {
-                        if (connectAndSubscribe(serverSocket, connectWallet, worker)) break;
-                    }
-                    if (inDevFee)
-                        printf("\033[2m[~] Dev fee session (1.5%% — AlphaMine Tech)\033[0m\n");
-                }
-            }
-
+            // Report hashrate to pool
             if (loopCount % 30 == 0 && loopCount > 0)
             {
                 json j;
@@ -2255,6 +1398,7 @@ int main(int argc, char *argv[])
                 serverSocket.sendData((char *)buffer.c_str(), buffer.size());
             }
 
+            // Receive pool data
             std::vector<uint8_t> receivedData;
             serverSocket.receiveDataAll(receivedData);
             std::string str(receivedData.begin(), receivedData.end());
@@ -2269,17 +1413,44 @@ int main(int argc, char *argv[])
 
             getIdentityFromPublicKey(computorPublicKey, miningID, false);
 
+#ifdef ENABLE_CUDA
+            // GPU mining batch
+            if (gpuMiner && ActiveMiner::checkGlobalQatumDataAvailability())
+            {
+                // Update GPU state if seed or pubkey changed
+                if (memcmp(lastSeed, randomSeed, 32) != 0 && !isZeros<32>(randomSeed))
+                {
+                    printf("[GPU] New mining seed, updating pool...\n");
+                    gpuMiner->updatePool(randomSeed);
+                    memcpy(lastSeed, randomSeed, 32);
+                }
+                if (memcmp(lastPubKey, computorPublicKey, 32) != 0 && !isZeros<32>(computorPublicKey))
+                {
+                    gpuMiner->updatePublicKey(computorPublicKey);
+                    memcpy(lastPubKey, computorPublicKey, 32);
+                }
+
+                std::vector<std::array<unsigned char, 32>> gpuFoundNonces;
+                int batchIts = gpuMiner->mineBatch(gpuFoundNonces);
+                numberOfMiningIterations += batchIts;
+
+                for (auto& n : gpuFoundNonces)
+                {
+                    std::lock_guard<std::mutex> guard(foundNonceLock);
+                    foundNonce.push(n);
+                    numberOfFoundSolutions++;
+                }
+            }
+#endif
+
+            // Submit solutions to pool
             bool haveNonceToSend = false;
-            size_t itemToSend = 0;
             std::array<unsigned char, 32> sendNonce;
             {
                 std::lock_guard<std::mutex> guard(foundNonceLock);
                 haveNonceToSend = foundNonce.size() > 0;
                 if (haveNonceToSend)
-                {
                     sendNonce = foundNonce.front();
-                }
-                itemToSend = foundNonce.size();
             }
 
             if (haveNonceToSend)
@@ -2303,48 +1474,58 @@ int main(int argc, char *argv[])
                 foundNonce.pop();
             }
 
+            // Print stats
             unsigned long long delta = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - timestamp).count();
-            if (delta >= 1000)
+            if (delta >= 10000)
             {
-                if (HyperIdentityMiner::checkGlobalQatumDataAvailability())
+                if (ActiveMiner::checkGlobalQatumDataAvailability())
                 {
                     lastIts = (numberOfMiningIterations - prevNumberOfMiningIterations) * 1000 / delta;
                     std::time_t now_time = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
                     std::tm *utc_time = std::gmtime(&now_time);
-                    printf("[AlphaMiner]  %04d-%02d-%02d %02d:%02d:%02d UTC  |  %llu it/s  |  %d solutions  |  %.7s...%.7s  |  diff %d\n",
+                    const char *modeTag = "CPU";
+#ifdef ENABLE_CUDA
+                    if (gpuMiner && numberOfThreads > 0) modeTag = "CPU+GPU";
+                    else if (gpuMiner) modeTag = "GPU";
+#endif
+                    long long itsPerMin = (numberOfMiningIterations - prevNumberOfMiningIterations) * 60000 / delta;
+                    printf("[AlphaMiner]  %04d-%02d-%02d %02d:%02d:%02d UTC  |  %lld it/min (%s) [%lld total]  |  %d solutions  |  %.7s...%.7s  |  diff %d\n",
                            utc_time->tm_year + 1900, utc_time->tm_mon + 1, utc_time->tm_mday, utc_time->tm_hour, utc_time->tm_min, utc_time->tm_sec,
-                           lastIts, numberOfFoundSolutions.load(), miningID, &miningID[53], difficulty.load());
+                           itsPerMin, modeTag, (long long)numberOfMiningIterations.load(), numberOfFoundSolutions.load(), miningID, &miningID[53], difficulty.load());
                     prevNumberOfMiningIterations = numberOfMiningIterations;
                     timestamp = std::chrono::steady_clock::now();
                 }
                 else
                 {
                     if (isZeros<32>(computorPublicKey))
-                    {
                         printf("[~] Waiting for computor public key...\n");
-                    }
                     else if (isZeros<32>(randomSeed))
-                    {
                         printf("[~] Waiting for mining seed (idle phase)...\n");
-                    }
                     else if (difficulty == 0)
-                    {
                         printf("[~] Waiting for difficulty...\n");
-                    }
                 }
             }
-            std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
+
+            // Only sleep if no GPU work (GPU batch already takes time)
+#ifdef ENABLE_CUDA
+            if (!gpuMiner || !ActiveMiner::checkGlobalQatumDataAvailability())
+#endif
+                std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(1000));
+
             loopCount++;
         }
+
+#ifdef ENABLE_CUDA
+        delete gpuMiner;
+#endif
     }
+
     printf("\n[*] Shutting down... Press Ctrl+C again to force stop.\n");
 
     for (auto &miningTh : miningThreads)
     {
         if (miningTh.joinable())
-        {
             miningTh.join();
-        }
     }
     printf("[*] AlphaMiner stopped.\n");
 
