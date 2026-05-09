@@ -9,11 +9,13 @@
 #include <queue>
 #include <atomic>
 #include <vector>
-#ifdef _MSC_VER
+#ifdef _WIN32
 #include <intrin.h>
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#if defined(_MSC_VER)
 #pragma comment(lib, "ws2_32.lib")
-
+#endif
 #else
 #include <signal.h>
 #include <immintrin.h>
@@ -21,7 +23,6 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <unistd.h>
-
 #endif
 
 #include "K12AndKeyUtil.h"
@@ -941,7 +942,7 @@ struct Miner
     }
 };
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 static BOOL WINAPI ctrlCHandlerRoutine(DWORD dwCtrlType)
 {
     if (!state)
@@ -970,7 +971,7 @@ void ctrlCHandlerRoutine(int signum)
 
 void consoleCtrlHandler()
 {
-#ifdef _MSC_VER
+#ifdef _WIN32
     SetConsoleCtrlHandler(ctrlCHandlerRoutine, TRUE);
 #else
     signal(SIGINT, ctrlCHandlerRoutine);
@@ -979,7 +980,7 @@ void consoleCtrlHandler()
 
 int getSystemProcs()
 {
-#ifdef _MSC_VER
+#ifdef _WIN32
 #else
 #endif
     return 0;
@@ -1024,7 +1025,7 @@ int miningThreadProc()
 
 struct ServerSocket
 {
-#ifdef _MSC_VER
+#ifdef _WIN32
     ServerSocket()
     {
         WSADATA wsaData;

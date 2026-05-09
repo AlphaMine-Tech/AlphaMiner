@@ -2,14 +2,14 @@
 #include <cstdint>
 #include <string>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #include <intrin.h>
 #else
 #include <immintrin.h>
 
 #endif
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define ROL64(a, offset) _rotl64(a, offset)
 #else
 
@@ -1018,7 +1018,7 @@ static void fpneg1271(felm_t a)
     a[0] = ~a[0];
     a[1] = 0x7FFFFFFFFFFFFFFF - a[1];
 }
-#ifndef _MSC_VER
+#if !defined(_WIN32) && !defined(_MSC_VER)
 static uint64_t _umul128(uint64_t a, uint64_t b, long long unsigned int *hi)
 {
     union { unsigned __int128 v; uint64_t sv[2]; } var;
