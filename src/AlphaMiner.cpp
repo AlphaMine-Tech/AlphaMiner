@@ -1085,6 +1085,11 @@ struct ServerSocket
             return false;
         }
 
+        // Avoid blocking forever on recv/send so stats loop can keep printing.
+        DWORD timeoutMs = 2000;
+        setsockopt(serverSocket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeoutMs, sizeof(timeoutMs));
+        setsockopt(serverSocket, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeoutMs, sizeof(timeoutMs));
+
         return true;
     }
 
