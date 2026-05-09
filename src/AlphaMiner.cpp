@@ -34,6 +34,27 @@
 using json = nlohmann::json;
 using namespace std;
 
+#ifdef _WIN32
+static void setupWindowsConsoleForPrettyOutput()
+{
+    // Force UTF-8 so banner glyphs render correctly.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    // Enable ANSI escape sequence processing for colors.
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE)
+    {
+        DWORD mode = 0;
+        if (GetConsoleMode(hOut, &mode))
+        {
+            mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            SetConsoleMode(hOut, mode);
+        }
+    }
+}
+#endif
+
 constexpr unsigned long long POOL_VEC_SIZE = (((1ULL << 32) + 64)) >> 3;                    // 2^32+64 bits ~ 512MB
 constexpr unsigned long long POOL_VEC_PADDING_SIZE = (POOL_VEC_SIZE + 200 - 1) / 200 * 200; // padding for multiple of 200
 
@@ -1258,6 +1279,9 @@ static const char *ALPHAMINER_VERSION = "0.2.0";
 
 int main(int argc, char *argv[])
 {
+#ifdef _WIN32
+    setupWindowsConsoleForPrettyOutput();
+#endif
     char miningID[61];
     miningID[60] = 0;
     string qatumBuffer = "";
