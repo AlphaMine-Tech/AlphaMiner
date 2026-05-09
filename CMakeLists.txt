@@ -27,7 +27,10 @@ endif()
 if(ENABLE_CUDA)
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 17)
-    set(CMAKE_CUDA_ARCHITECTURES 86)
+    # Prefer native detection on the build host; allows modern cards beyond a single fixed arch.
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
 
     add_executable(${PROJECT_NAME}
         src/AlphaMiner.cpp

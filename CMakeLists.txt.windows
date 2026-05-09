@@ -47,7 +47,10 @@ endif()
 # CUDA configuration
 if(ENABLE_CUDA)
     enable_language(CUDA)
-    set(CMAKE_CUDA_ARCHITECTURES 86)  # Pascal and newer
+    # Prefer native detection on the build host; allows modern cards beyond a single fixed arch.
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
     
     # CUDA sources
     set(CUDA_SOURCES
