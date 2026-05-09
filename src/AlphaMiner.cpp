@@ -1055,10 +1055,32 @@ struct ServerSocket
         ZeroMemory(&addr, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(nodePort);
-        sscanf_s(address, "%hhu.%hhu.%hhu.%hhu", &addr.sin_addr.S_un.S_un_b.s_b1, &addr.sin_addr.S_un.S_un_b.s_b2, &addr.sin_addr.S_un.S_un_b.s_b3, &addr.sin_addr.S_un.S_un_b.s_b4);
+
+        // Try direct IPv4 parse first, then DNS resolve for hostnames.
+        if (InetPtonA(AF_INET, address, &addr.sin_addr) != 1)
+        {
+            addrinfo hints{};
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            addrinfo *res = nullptr;
+            if (getaddrinfo(address, nullptr, &hints, &res) != 0 || !res)
+            {
+                printf("[!] Cannot resolve hostname: %s\n", address);
+                closeConnection();
+                return false;
+            }
+            addr.sin_addr = ((sockaddr_in *)res->ai_addr)->sin_addr;
+            char resolved[INET_ADDRSTRLEN] = {0};
+            InetNtopA(AF_INET, &addr.sin_addr, resolved, INET_ADDRSTRLEN);
+            printf("[+] Resolved %s -> %s\n", address, resolved);
+            freeaddrinfo(res);
+        }
+
         if (connect(serverSocket, (const sockaddr *)&addr, sizeof(addr)))
         {
-            printf("Fail to connect to %d.%d.%d.%d (%d)!\n", addr.sin_addr.S_un.S_un_b.s_b1, addr.sin_addr.S_un.S_un_b.s_b2, addr.sin_addr.S_un.S_un_b.s_b3, addr.sin_addr.S_un.S_un_b.s_b4, WSAGetLastError());
+            char ipbuf[INET_ADDRSTRLEN] = {0};
+            InetNtopA(AF_INET, &addr.sin_addr, ipbuf, INET_ADDRSTRLEN);
+            printf("Fail to connect to %s (%d)!\n", ipbuf[0] ? ipbuf : address, WSAGetLastError());
             closeConnection();
             return false;
         }
