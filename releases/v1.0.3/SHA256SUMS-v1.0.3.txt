@@ -1,0 +1,5 @@
+9883bab9238ff7401cdb544affc1a157331ab8fb832cdf97ad8e6f35d8f7552f  alphaminer-windows-x86_64-cpu-v1.0.3.zip
+c7900210423a5cbb475fd08a1e4a251b5ee3209b97bdb2bbdb81035bba7cc205  alphaminer-windows-x86_64-gpu-hybrid-v1.0.3.zip
+ac992ad25b393c8aab38fe7788e45432f2b43867faafd4374e52355ec350afd3  alphaminer-ubuntu-x86_64-cpu-v1.0.3.tar.gz
+0f7154d135505879c5b5258ec11e5c537898752b8feb4230a0503611cd5186f3  alphaminer-ubuntu-x86_64-gpu-hybrid-v1.0.3.tar.gz
+a4158ce73be35c5c40366d47d7334c8e8d1467517b5e693ddda89bc822425345  alphaminer-hiveos-gpu-hybrid-v1.0.3.tar.gz
