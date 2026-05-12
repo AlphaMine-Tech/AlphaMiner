@@ -1,0 +1,4 @@
+37bb457343891fce85b33ace68e03a399d9afb527866862557134de5685dcc17  dist/alphaminer-hiveos-gpu-hybrid-v1.0.2.tar.gz
+ac992ad25b393c8aab38fe7788e45432f2b43867faafd4374e52355ec350afd3  dist/alphaminer-ubuntu-x86_64-cpu-v1.0.2.tar.gz
+0f7154d135505879c5b5258ec11e5c537898752b8feb4230a0503611cd5186f3  dist/alphaminer-ubuntu-x86_64-gpu-hybrid-v1.0.2.tar.gz
+9883bab9238ff7401cdb544affc1a157331ab8fb832cdf97ad8e6f35d8f7552f  dist/alphaminer-windows-x86_64-cpu-v1.0.2.zip
